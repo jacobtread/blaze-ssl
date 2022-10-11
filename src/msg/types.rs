@@ -1,31 +1,9 @@
-use crate::msg::codec::{decode_u32, Codec, Reader};
-use lazy_static::lazy_static;
-use ring::rand;
+use crate::msg::codec::{Codec, Reader};
 use ring::rand::{SecureRandom, SystemRandom};
 
-lazy_static! {
-    pub static ref SSL_V3: &'static ProtocolVersion = &ProtocolVersion(0x0300);
-}
-
-/// Structure representing an encoded protocol version.
-#[derive(Debug, PartialEq, Eq)]
-pub struct ProtocolVersion(u16);
-
-impl ProtocolVersion {
-    pub fn is_valid(&self) -> bool {
-        self.0 == 0x0300
-    }
-}
-
-impl Codec for ProtocolVersion {
-    fn encode(&self, output: &mut Vec<u8>) {
-        self.0.encode(output);
-    }
-
-    fn decode(input: &mut Reader) -> Option<Self> {
-        Some(ProtocolVersion(u16::decode(input)?))
-    }
-}
+/// The certificate must be DER-encoded X.509.
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
+pub struct Certificate(pub Vec<u8>);
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct SSLRandom(pub [u8; 32]);
@@ -41,18 +19,6 @@ impl SSLRandom {
             .map_err(|_| GetRandomFailed)?;
         Ok(Self(data))
     }
-}
-
-/// Fill the whole slice with random material.
-pub(crate) fn fill_random(bytes: &mut [u8]) -> Result<(), GetRandomFailed> {
-    SystemRandom::new().fill(bytes).map_err(|_| GetRandomFailed)
-}
-
-/// Return a uniformly random u32.
-pub(crate) fn random_u32() -> Result<u32, GetRandomFailed> {
-    let mut buf = [0u8; 4];
-    fill_random(&mut buf)?;
-    decode_u32(&buf).ok_or(GetRandomFailed)
 }
 
 impl Codec for SSLRandom {

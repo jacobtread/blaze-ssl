@@ -1,14 +1,12 @@
 use crate::msg::codec::{decode_vec_u16, decode_vec_u8, encode_vec_u24, u24, Codec, Reader};
-use crate::msg::data::Certificate;
-use crate::msg::enums::CipherSuite::{SSL_NULL_WITH_NULL_NULL, TLS_RSA_WITH_RC4_128_SHA};
-use crate::msg::enums::{CipherSuite, ContentType};
-use crate::msg::types::{ProtocolVersion, SSLRandom, SSL_V3};
-use crate::msg::{Message, OpaqueMessage};
-use std::io::Read;
+use crate::msg::constants::{PROTOCOL_SSL3, TLS_RSA_WITH_RC4_128_SHA};
+use crate::msg::types::Certificate;
+use crate::msg::types::SSLRandom;
+use crate::msg::{Message, MessageType};
 
 #[derive(Debug)]
 pub enum HandshakePayload {
-    ClientHello(ProtocolVersion, SSLRandom),
+    ClientHello(u16, SSLRandom),
     ServerHello(SSLRandom),
     Certificate(Certificate),
     ServerHelloDone,
@@ -43,7 +41,7 @@ impl HandshakePayload {
     pub fn as_message(&self) -> Message {
         let payload = self.encode();
         Message {
-            content_type: ContentType::Handshake,
+            ty: MessageType::Handshake,
             payload,
         }
     }
@@ -52,7 +50,7 @@ impl HandshakePayload {
         let mut content = Vec::new();
         match self {
             HandshakePayload::ServerHello(random) => {
-                SSL_V3.encode(&mut content);
+                PROTOCOL_SSL3.encode(&mut content);
                 random.encode(&mut content);
 
                 // NO-OP Session ID
@@ -87,10 +85,10 @@ impl HandshakePayload {
         let mut contents = input.slice(length)?;
         Some(match ty {
             HandshakePayload::CLIENT_HELLO => {
-                let client_version = ProtocolVersion::decode(&mut contents)?;
+                let client_version = u16::decode(&mut contents)?;
                 let client_random = SSLRandom::decode(&mut contents)?;
                 let _session = decode_vec_u8::<u8>(&mut contents)?;
-                let _cipher_suites = decode_vec_u16::<CipherSuite>(&mut contents)?;
+                let _cipher_suites = decode_vec_u16::<u16>(&mut contents)?;
                 let _compression_methods = decode_vec_u8::<u8>(&mut contents)?;
                 HandshakePayload::ClientHello(client_version, client_random)
             }
@@ -108,15 +106,5 @@ impl HandshakePayload {
             }
             _ => HandshakePayload::Unknown,
         })
-    }
-}
-
-impl Into<OpaqueMessage> for HandshakePayload {
-    fn into(self) -> OpaqueMessage {
-        let payload = self.encode();
-        OpaqueMessage {
-            content_type: ContentType::Handshake,
-            payload,
-        }
     }
 }

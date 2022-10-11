@@ -1,25 +1,18 @@
 use crate::hash::generate_master_secret;
-use crate::msg::codec::{Codec, Reader};
-use crate::msg::data::{Certificate, PrivateKey};
 use crate::msg::deframer::{fragment_message, MessageDeframer};
 use crate::msg::enc::MessageProcessor;
-use crate::msg::enums::ContentType;
 use crate::msg::handshake::HandshakePayload;
 use crate::msg::joiner::HandshakeJoiner;
-use crate::msg::types::{ProtocolVersion, SSLRandom};
-use crate::msg::{Message, OpaqueMessage};
+use crate::msg::types::{Certificate, SSLRandom};
+use crate::msg::{Message, MessageType};
 use derive_more::From;
 use rc4::{KeyInit, Rc4};
-use ring::hmac;
-use ring::signature::RsaKeyPair;
 use rsa::{PaddingScheme, RsaPrivateKey};
-use std::fs::read;
 use std::io;
-use std::io::{BufRead, ErrorKind, Read, Write};
+use std::io::{Read, Write};
 
 pub struct SslStream<S> {
     stream: S,
-    has_seen_eof: bool,
     certificate: Certificate,
     private_key: RsaPrivateKey,
     deframer: MessageDeframer,
@@ -54,31 +47,23 @@ where
     pub fn new(value: S, cert: Certificate, private: RsaPrivateKey) -> SslResult<Self> {
         let stream = Self {
             stream: value,
-            has_seen_eof: false,
             certificate: cert,
             private_key: private,
             deframer: MessageDeframer::new(),
             processor: MessageProcessor::None,
         };
         let handshaking = HandshakingStream {
-            state: HandshakeState::WaitingHello,
-            stream: stream,
+            stream,
             joiner: HandshakeJoiner::new(),
         };
         handshaking.handshake()
     }
 
-    pub fn read_tls(&mut self) -> Result<usize, io::Error> {
-        let res = self.deframer.read(&mut self.stream);
-        if let Ok(0) = res {
-            self.has_seen_eof = true;
-        }
-        res
-    }
-
-    pub fn take_message(&mut self) -> SslResult<Message> {
+    /// Attempts to take the next message form the deframer or read a new
+    /// message from the underlying stream if there is no parsable messages
+    pub fn next_message(&mut self) -> SslResult<Message> {
         loop {
-            if let Some(message) = self.deframer.messages.pop_front() {
+            if let Some(message) = self.deframer.next() {
                 println!("Raw Message: {message:?}");
                 let message = self.processor.decrypt(message);
                 if !matches!(self.processor, MessageProcessor::None) {
@@ -86,13 +71,15 @@ where
                 }
                 return Ok(message);
             }
-            self.deframer.read(&mut self.stream)?;
-            if self.deframer.invalid {
+            if !self.deframer.read(&mut self.stream)? {
                 return Err(SslError::InvalidMessages);
             }
         }
     }
 
+    /// Fragments the provided message and encrypts the contents if
+    /// encryption is available writing the output to the underlying
+    /// stream
     pub fn write_message(&mut self, message: Message) -> io::Result<()> {
         for msg in fragment_message(&message) {
             let msg = self.processor.encrypt(msg);
@@ -131,7 +118,6 @@ where
 /// reading handshake messages from the stream
 pub struct HandshakingStream<S> {
     stream: SslStream<S>,
-    state: HandshakeState,
     joiner: HandshakeJoiner,
 }
 
@@ -143,18 +129,6 @@ impl<S> HandshakingStream<S> {
     pub fn get_mut(&mut self) -> &mut S {
         self.stream.get_mut()
     }
-}
-
-pub enum HandshakeState {
-    WaitingHello,
-    Exchanging {
-        server_random: SSLRandom,
-        client_random: SSLRandom,
-    },
-    WaitCipherChange {
-        master_key: [u8; 48],
-        seed: [u8; 64],
-    },
 }
 
 /// Structure for storing the random values from
@@ -181,14 +155,14 @@ where
     /// if one could not be formed or another message type was received
     fn next_handshake(&mut self) -> SslResult<HandshakePayload> {
         loop {
-            if let Some(payload) = self.joiner.frames.pop_front() {
+            if let Some(payload) = self.joiner.next() {
                 return Ok(payload);
             } else {
-                let message = self.stream.take_message()?;
-                if message.content_type != ContentType::Handshake {
+                let message = self.stream.next_message()?;
+                if message.ty != MessageType::Handshake {
                     return Err(SslError::UnexpectedMessage);
                 }
-                self.joiner.next_message(message);
+                self.joiner.consume_message(message);
             }
         }
     }
@@ -283,8 +257,8 @@ where
         println!("State = Cipher Change");
 
         // Expect the client to change cipher spec
-        match self.stream.take_message()?.content_type {
-            ContentType::ChangeCipherSpec => {}
+        match self.stream.next_message()?.ty {
+            MessageType::ChangeCipherSpec => {}
             _ => return Err(SslError::UnexpectedMessage),
         }
 
@@ -303,6 +277,8 @@ where
         Ok(())
     }
 
+    /// Accepts the finishing message from the client switching the clients
+    /// CipherSpec and writing back the finished message
     fn accept_finished(&mut self) -> SslResult<()> {
         let (md5_hash, sha_hash) = match self.next_handshake()? {
             HandshakePayload::Finished { md5_hash, sha_hash } => (md5_hash, sha_hash),
@@ -312,7 +288,7 @@ where
         println!("Got finished {md5_hash:?} {sha_hash:?}");
 
         let cipher_spec_msg = Message {
-            content_type: ContentType::ChangeCipherSpec,
+            ty: MessageType::ChangeCipherSpec,
             payload: vec![1],
         };
 

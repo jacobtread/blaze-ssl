@@ -1,7 +1,7 @@
 extern crate core;
 
-use crate::msg::data::{Certificate, PrivateKey};
 use crate::stream::SslStream;
+use msg::types::Certificate;
 use rsa::pkcs8::DecodePrivateKey;
 use rsa::RsaPrivateKey;
 use std::net::TcpListener;
@@ -66,7 +66,7 @@ fn main() {
         thread::spawn(move || {
             println!("Connection");
             let stream = stream.expect("Failed to accept stream");
-            let stream =
+            let _stream =
                 &mut SslStream::new(stream, cert, key).expect("Failed to complete handshake");
         });
     }

@@ -1,9 +1,6 @@
-use crate::msg::codec::{u24, Codec, Reader};
-use crate::msg::enums::ContentType;
+use crate::msg::codec::{u24, Reader};
 use crate::msg::handshake::HandshakePayload;
-use crate::msg::payload::Payload;
-use crate::msg::types::ProtocolVersion;
-use crate::msg::{Message, OpaqueMessage};
+use crate::msg::Message;
 use std::collections::VecDeque;
 
 const HEADER_SIZE: usize = 1 + 3;
@@ -19,7 +16,7 @@ const MAX_HANDSHAKE_SIZE: u32 = 0xffff;
 /// one handshake payload.
 pub struct HandshakeJoiner {
     /// Completed handshake frames for output.
-    pub frames: VecDeque<HandshakePayload>,
+    pub payloads: VecDeque<HandshakePayload>,
 
     /// The message payload we're currently accumulating.
     buf: Vec<u8>,
@@ -46,14 +43,15 @@ impl HandshakeJoiner {
     /// Make a new HandshakeJoiner.
     pub fn new() -> Self {
         Self {
-            frames: VecDeque::new(),
+            payloads: VecDeque::new(),
             buf: Vec::new(),
         }
     }
 
-    /// Do we have any buffered data?
-    pub fn is_empty(&self) -> bool {
-        self.buf.is_empty()
+    /// Attempts to take the next handshake payload if there
+    /// are any available
+    pub fn next(&mut self) -> Option<HandshakePayload> {
+        self.payloads.pop_front()
     }
 
     /// Take the message, and join/split it as needed.
@@ -63,7 +61,7 @@ impl HandshakeJoiner {
     /// Returns None if msg or a preceding message was corrupt.
     /// You cannot recover from this situation.  Otherwise returns
     /// a count of how many messages we queued.
-    pub fn next_message(&mut self, msg: Message) -> Option<usize> {
+    pub fn consume_message(&mut self, msg: Message) -> Option<usize> {
         // The vast majority of the time `self.buf` will be empty since most
         // handshake messages arrive in a single fragment. Avoid allocating and
         // copying in that common case.
@@ -126,7 +124,7 @@ impl HandshakeJoiner {
                 None => return false,
             };
 
-            self.frames.push_back(parsed);
+            self.payloads.push_back(parsed);
             rd.cursor()
         };
         self.buf = self.buf.split_off(used);

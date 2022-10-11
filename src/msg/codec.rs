@@ -1,5 +1,4 @@
-use crate::msg::data::Certificate;
-use rc4::consts::U8;
+use crate::msg::types::Certificate;
 use std::cmp;
 use std::fmt::Debug;
 

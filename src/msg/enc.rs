@@ -1,15 +1,6 @@
 use crate::msg::{BorrowedMessage, Message, OpaqueMessage};
-use derive_more::From;
-use rc4::cipher::{BlockDecryptMut, StreamCipherError};
 use rc4::consts::U16;
-use rc4::{KeyInit, Rc4, StreamCipher};
-use std::error::Error;
-use std::rc::Rc;
-
-#[derive(Debug, From)]
-pub enum CryptError {
-    StreamCipherError(StreamCipherError),
-}
+use rc4::{Rc4, StreamCipher};
 
 /// Structure representing known types for encoding and decoding messages
 pub enum MessageProcessor {
@@ -24,7 +15,7 @@ impl MessageProcessor {
     pub fn encrypt(&mut self, message: BorrowedMessage) -> OpaqueMessage {
         match self {
             MessageProcessor::None => OpaqueMessage {
-                content_type: message.content_type,
+                ty: message.content_type,
                 payload: message.payload.to_vec(),
             },
             MessageProcessor::RC4 { write_key, .. } => {
@@ -34,7 +25,7 @@ impl MessageProcessor {
                 // TODO: Write mac
 
                 OpaqueMessage {
-                    content_type: message.content_type,
+                    ty: message.content_type,
                     payload,
                 }
             }
@@ -44,7 +35,7 @@ impl MessageProcessor {
     pub fn decrypt(&mut self, message: OpaqueMessage) -> Message {
         match self {
             MessageProcessor::None => Message {
-                content_type: message.content_type,
+                ty: message.ty,
                 payload: message.payload,
             },
             MessageProcessor::RC4 { read_key, .. } => {
@@ -54,7 +45,7 @@ impl MessageProcessor {
                 // TODO: Remove mac
 
                 Message {
-                    content_type: message.content_type,
+                    ty: message.ty,
                     payload,
                 }
             }

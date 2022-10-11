@@ -1,7 +1,5 @@
 use ring::hmac;
 use ring::hmac::HMAC_SHA1_FOR_LEGACY_USE_ONLY;
-use sha::sha1::Sha1;
-use sha::utils::{Digest, DigestExt};
 
 pub fn generate_master_secret(pre: &[u8; 48], randoms: &[u8; 64]) -> [u8; 48] {
     let mut out = [0u8; 48];

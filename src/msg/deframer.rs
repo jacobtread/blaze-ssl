@@ -1,4 +1,4 @@
-use crate::msg::codec::{Codec, Reader};
+use crate::msg::codec::Reader;
 use crate::msg::{BorrowedMessage, Message, MessageError, OpaqueMessage};
 use std::collections::VecDeque;
 use std::io;
@@ -15,7 +15,7 @@ pub fn fragment_message<'a>(
         .payload
         .chunks(MAX_FRAGMENT_LEN)
         .map(move |c| BorrowedMessage {
-            content_type: message.content_type.clone(),
+            content_type: message.ty.clone(),
             payload: c,
         })
 }
@@ -56,17 +56,17 @@ impl MessageDeframer {
         }
     }
 
-    /// Returns whether there is messages currently in the queue
-    pub fn has_message(&self) -> bool {
-        !self.messages.is_empty()
+    /// Attempts to take the next complete message from the
+    /// messages queue if there are any
+    pub fn next(&mut self) -> Option<OpaqueMessage> {
+        self.messages.pop_front()
     }
 
     /// Read some bytes from the provided `read` and add them to the internal
     /// buffer. Attempts to decode messages from the internal buffer returning
     /// the number of bytes read.
-    pub fn read(&mut self, read: &mut dyn Read) -> io::Result<usize> {
-        let read_count = read.read(&mut self.buffer[self.used..])?;
-        self.used += read_count;
+    pub fn read(&mut self, read: &mut dyn Read) -> io::Result<bool> {
+        self.used += read.read(&mut self.buffer[self.used..])?;
         loop {
             match self.try_deframe() {
                 BufferAction::Invalid => {
@@ -77,7 +77,7 @@ impl MessageDeframer {
                 BufferAction::Partial => break,
             }
         }
-        Ok(read_count)
+        Ok(!self.invalid)
     }
 
     fn try_deframe(&mut self) -> BufferAction {
