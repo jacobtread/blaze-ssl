@@ -6,7 +6,6 @@ pub mod deframer;
 pub mod enc;
 pub mod handshake;
 pub mod joiner;
-pub mod macros;
 pub mod types;
 
 pub const SSL_V3: u16 = 0x0300;
@@ -70,8 +69,8 @@ impl Codec for MessageType {
 /// Message where the payload is borrowed from a slice of another message
 #[derive(Debug)]
 pub struct BorrowedMessage<'a> {
-    content_type: MessageType,
-    payload: &'a [u8],
+    pub content_type: MessageType,
+    pub payload: &'a [u8],
 }
 
 #[derive(Debug)]

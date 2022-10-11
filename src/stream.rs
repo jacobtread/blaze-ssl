@@ -1,15 +1,14 @@
 use crate::hash::generate_master_secret;
 use crate::msg::deframer::{fragment_message, MessageDeframer};
-use crate::msg::enc::MessageProcessor;
 use crate::msg::handshake::HandshakePayload;
 use crate::msg::joiner::HandshakeJoiner;
 use crate::msg::types::{Certificate, SSLRandom};
+use crate::msg::{BorrowedMessage, OpaqueMessage};
 use crate::msg::{Message, MessageType};
-use derive_more::From;
-use rc4::{KeyInit, Rc4};
+use rc4::consts::U16;
+use rc4::{KeyInit, Rc4, StreamCipher};
 use rsa::{PaddingScheme, RsaPrivateKey};
-use std::io;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 
 pub struct SslStream<S> {
     stream: S,
@@ -29,13 +28,19 @@ impl<S> SslStream<S> {
     }
 }
 
-#[derive(Debug, From)]
+#[derive(Debug)]
 pub enum SslError {
     IO(io::Error),
     InvalidMessages,
     UnexpectedMessage,
     Failure,
     Unsupported,
+}
+
+impl From<io::Error> for SslError {
+    fn from(err: io::Error) -> Self {
+        SslError::IO(err)
+    }
 }
 
 pub type SslResult<T> = Result<T, SslError>;
@@ -144,7 +149,7 @@ pub struct HelloData {
 #[derive(Debug)]
 pub struct ExchangeData {
     master_key: [u8; 48],
-    randoms: [u8; 64],
+    _randoms: [u8; 64],
 }
 
 impl<S> HandshakingStream<S>
@@ -247,7 +252,7 @@ where
 
         Ok(ExchangeData {
             master_key,
-            randoms,
+            _randoms: randoms,
         })
     }
 
@@ -296,5 +301,56 @@ where
 
         self.write_handshake(HandshakePayload::Finished { md5_hash, sha_hash })?;
         Ok(())
+    }
+}
+
+/// Structure representing known types for encoding and decoding messages
+pub enum MessageProcessor {
+    None,
+    RC4 {
+        read_key: Rc4<U16>,
+        write_key: Rc4<U16>,
+    },
+}
+
+impl MessageProcessor {
+    pub fn encrypt(&mut self, message: BorrowedMessage) -> OpaqueMessage {
+        match self {
+            MessageProcessor::None => OpaqueMessage {
+                ty: message.content_type,
+                payload: message.payload.to_vec(),
+            },
+            MessageProcessor::RC4 { write_key, .. } => {
+                let mut payload = message.payload.to_vec();
+                write_key.apply_keystream(&mut payload);
+
+                // TODO: Write mac
+
+                OpaqueMessage {
+                    ty: message.content_type,
+                    payload,
+                }
+            }
+        }
+    }
+
+    pub fn decrypt(&mut self, message: OpaqueMessage) -> Message {
+        match self {
+            MessageProcessor::None => Message {
+                ty: message.ty,
+                payload: message.payload,
+            },
+            MessageProcessor::RC4 { read_key, .. } => {
+                let mut payload = message.payload.to_vec();
+                read_key.apply_keystream(&mut payload);
+
+                // TODO: Remove mac
+
+                Message {
+                    ty: message.ty,
+                    payload,
+                }
+            }
+        }
     }
 }

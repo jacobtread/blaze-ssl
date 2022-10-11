@@ -29,10 +29,3 @@ fn concat_sign(key: &hmac::Key, a: &[u8], b: &[u8]) -> hmac::Tag {
     ctx.update(b);
     ctx.sign()
 }
-
-fn concat(a: &[u8], b: &[u8]) -> Vec<u8> {
-    let mut ret = Vec::new();
-    ret.extend_from_slice(a);
-    ret.extend_from_slice(b);
-    ret
-}
