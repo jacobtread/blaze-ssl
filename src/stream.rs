@@ -1,6 +1,6 @@
 use crate::codec::{Certificate, SSLRandom};
 use crate::handshake::HandshakePayload;
-use crate::hash::generate_master_secret;
+use crate::hash::create_master_secret;
 use crate::msgs::{
     fragment_message, BorrowedMessage, HandshakeJoiner, MessageDeframer, OpaqueMessage,
 };
@@ -136,6 +136,12 @@ impl<S> HandshakingStream<S> {
     }
 }
 
+/// Type of pre master key
+pub type PreMasterKey = [u8; 48];
+/// Type of master key
+pub type MasterKey = [u8; 48];
+/// Type of slice from two combined randoms
+pub type CombinedRandom = [u8; 64];
 /// Structure for storing the random values from
 /// the client and server responses
 #[derive(Debug)]
@@ -148,8 +154,8 @@ pub struct HelloData {
 /// randoms values from the ClientKeyExchange
 #[derive(Debug)]
 pub struct ExchangeData {
-    master_key: [u8; 48],
-    _randoms: [u8; 64],
+    master_key: MasterKey,
+    _randoms: CombinedRandom,
 }
 
 impl<S> HandshakingStream<S>
@@ -244,7 +250,7 @@ where
         randoms[..32].copy_from_slice(&hello.client_random.0);
         randoms[32..].copy_from_slice(&hello.server_random.0);
 
-        let master_key = generate_master_secret(&pm_key, &randoms);
+        let master_key = create_master_secret(&pm_key, &randoms);
 
         println!("Created master key: {master_key:?}");
 
