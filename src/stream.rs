@@ -286,7 +286,7 @@ where
     /// CipherSpec and writing back the finished message
     fn accept_finished(&mut self) -> SslResult<()> {
         let (md5_hash, sha_hash) = match self.next_handshake()? {
-            HandshakePayload::Finished { md5_hash, sha_hash } => (md5_hash, sha_hash),
+            HandshakePayload::Finished(a, b) => (a, b),
             _ => return Err(SslError::UnexpectedMessage),
         };
 
@@ -299,7 +299,7 @@ where
 
         self.stream.write_message(cipher_spec_msg)?;
 
-        self.write_handshake(HandshakePayload::Finished { md5_hash, sha_hash })?;
+        self.write_handshake(HandshakePayload::Finished(md5_hash, sha_hash))?;
         Ok(())
     }
 }
