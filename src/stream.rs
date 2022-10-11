@@ -243,7 +243,7 @@ where
         };
 
         println!("Got encrypted pre-master key");
-        let pm_key_vec = self
+        let pm_key = self
             .stream
             .private_key
             .decrypt(PaddingScheme::PKCS1v15Encrypt, &encrypted_pm_key)
@@ -251,9 +251,6 @@ where
                 println!("Failed to decrypt master key");
                 SslError::Failure
             })?;
-
-        let mut pm_key = [0u8; 48];
-        pm_key.clone_from_slice(&pm_key_vec);
 
         println!("Decrypted pre-master key: {pm_key:?}");
 
@@ -277,15 +274,6 @@ where
         let mut server_write_key = [0u8; 16];
         server_write_key.copy_from_slice(&key_block[56..72]);
 
-        println!("Secrets: ");
-        println!("{client_write_secret:?}");
-        println!("{server_write_secret:?}");
-        println!("Keys: ");
-        println!("{client_write_key:?}");
-        println!("{server_write_key:?}");
-
-        println!("Created keys");
-
         println!("State -> Cipher Change");
 
         Ok(ExchangeData {
@@ -307,10 +295,10 @@ where
             _ => return Err(SslError::UnexpectedMessage),
         }
 
-        let client_write_key = Key::<U16>::from_slice(&exchange_data.server_write_key);
-        let client_write_key = Rc4::new(client_write_key);
-        let server_write_key = Key::<U16>::from_slice(&exchange_data.client_write_key);
-        let server_write_key = Rc4::new(server_write_key);
+        let client_write_key = Key::from(exchange_data.client_write_key);
+        let client_write_key = Rc4::new(&client_write_key);
+        let server_write_key = Key::from(exchange_data.server_write_key);
+        let server_write_key = Rc4::new(&server_write_key);
 
         println!("Created RC4 keys from master key. Switching to CipherSpec");
 
