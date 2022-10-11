@@ -1,8 +1,8 @@
-use crate::msg::codec::{decode_vec_u16, decode_vec_u8, encode_vec_u24, u24, Codec, Reader};
-use crate::msg::constants::{PROTOCOL_SSL3, TLS_RSA_WITH_RC4_128_SHA};
-use crate::msg::types::Certificate;
-use crate::msg::types::SSLRandom;
-use crate::msg::{Message, MessageType};
+use crate::codec::{
+    decode_vec_u16, decode_vec_u8, encode_vec_u24, u24, Certificate, Codec, Reader, SSLRandom,
+};
+use crate::constants::{PROTOCOL_SSL3, TLS_RSA_WITH_RC4_128_SHA};
+use crate::msgs::{Message, MessageType};
 
 #[derive(Debug)]
 pub enum HandshakePayload {

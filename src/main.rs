@@ -1,14 +1,17 @@
 extern crate core;
 
-use crate::stream::SslStream;
-use msg::types::Certificate;
+use codec::Certificate;
 use rsa::pkcs8::DecodePrivateKey;
 use rsa::RsaPrivateKey;
 use std::net::TcpListener;
 use std::thread;
+use stream::SslStream;
 
+pub mod codec;
+pub mod constants;
+pub mod handshake;
 pub mod hash;
-pub(crate) mod msg;
+pub mod msgs;
 pub mod stream;
 
 /// The private key used by the redirector

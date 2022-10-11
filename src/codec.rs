@@ -1,4 +1,4 @@
-use crate::msg::types::Certificate;
+use ring::rand::{SecureRandom, SystemRandom};
 use std::fmt::Debug;
 
 /// Structure that allows reading through a slice of bytes
@@ -222,6 +222,10 @@ pub fn decode_vec_u16<C: Codec>(input: &mut Reader) -> Option<Vec<C>> {
     Some(values)
 }
 
+/// The certificate must be DER-encoded X.509.
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
+pub struct Certificate(pub Vec<u8>);
+
 /// The encoding for the certificates is the same as that of PayloadU24
 /// TODO: look into merging these structs or creating a conversion.
 impl Codec for Certificate {
@@ -235,5 +239,35 @@ impl Codec for Certificate {
         let mut reader = input.slice(length)?;
         let content = reader.remaining().to_vec();
         Some(Self(content))
+    }
+}
+
+/// Structure representing a random slice of 32 bytes
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct SSLRandom(pub [u8; 32]);
+
+#[derive(Debug)]
+pub struct GetRandomFailed;
+
+impl SSLRandom {
+    pub fn new() -> Result<Self, GetRandomFailed> {
+        let mut data = [0u8; 32];
+        SystemRandom::new()
+            .fill(&mut data)
+            .map_err(|_| GetRandomFailed)?;
+        Ok(Self(data))
+    }
+}
+
+impl Codec for SSLRandom {
+    fn encode(&self, output: &mut Vec<u8>) {
+        output.extend_from_slice(&self.0);
+    }
+
+    fn decode(input: &mut Reader) -> Option<Self> {
+        let bytes = input.take(32)?;
+        let mut opaque = [0; 32];
+        opaque.clone_from_slice(bytes);
+        Some(Self(opaque))
     }
 }

@@ -1,10 +1,10 @@
+use crate::codec::{Certificate, SSLRandom};
+use crate::handshake::HandshakePayload;
 use crate::hash::generate_master_secret;
-use crate::msg::deframer::{fragment_message, MessageDeframer};
-use crate::msg::handshake::HandshakePayload;
-use crate::msg::joiner::HandshakeJoiner;
-use crate::msg::types::{Certificate, SSLRandom};
-use crate::msg::{BorrowedMessage, OpaqueMessage};
-use crate::msg::{Message, MessageType};
+use crate::msgs::{
+    fragment_message, BorrowedMessage, HandshakeJoiner, MessageDeframer, OpaqueMessage,
+};
+use crate::msgs::{Message, MessageType};
 use rc4::consts::U16;
 use rc4::{KeyInit, Rc4, StreamCipher};
 use rsa::{PaddingScheme, RsaPrivateKey};
