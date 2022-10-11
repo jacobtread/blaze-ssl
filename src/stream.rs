@@ -1,11 +1,11 @@
-use crate::codec::{Certificate, RandomBytes, SSLRandom};
+use crate::codec::{Certificate, SSLRandom};
 use crate::handshake::HandshakePayload;
-use crate::hash::{generate_key_block, get_final_key};
+use crate::hash::generate_key_block;
 use crate::msgs::{
     fragment_message, BorrowedMessage, HandshakeJoiner, MessageDeframer, OpaqueMessage,
 };
 use crate::msgs::{Message, MessageType};
-use rc4::consts::{U16, U4, U8};
+use rc4::consts::U16;
 use rc4::{Key, KeyInit, Rc4, StreamCipher};
 use rsa::{PaddingScheme, RsaPrivateKey};
 use sha1_smol::Sha1;
@@ -163,8 +163,8 @@ pub struct HelloData {
 /// randoms values from the ClientKeyExchange
 #[derive(Debug)]
 pub struct ExchangeData {
-    client_write_secret: [u8; 16],
-    server_write_secret: [u8; 16],
+    client_write_secret: [u8; 20],
+    server_write_secret: [u8; 20],
     client_write_key: [u8; 16],
     server_write_key: [u8; 16],
 }
@@ -257,31 +257,25 @@ where
 
         println!("Decrypted pre-master key: {pm_key:?}");
 
-        let mut randoms = [0u8; 64];
-        randoms[..32].copy_from_slice(&hello.client_random.0);
-        randoms[32..].copy_from_slice(&hello.server_random.0);
-
-        let server_random = &hello.server_random.0;
         let client_random = &hello.client_random.0;
+        let server_random = &hello.server_random.0;
 
         let mut master_key = [0u8; 48];
         generate_key_block(&mut master_key, &pm_key, client_random, server_random);
 
-        let mut key_block = [0u8; 64];
+        // Generate key block 80 bytes long (20x2 for write secrets + 16x2 for write keys) only 72 bytes used
+        let mut key_block = [0u8; 80];
         generate_key_block(&mut key_block, &master_key, server_random, client_random);
 
-        let mut client_write_secret = [0u8; 16];
-        client_write_secret.clone_from_slice(&key_block[0..16]);
-        let mut server_write_secret = [0u8; 16];
-        server_write_secret.clone_from_slice(&key_block[16..32]);
+        let mut client_write_secret = [0u8; 20];
+        client_write_secret.copy_from_slice(&key_block[0..20]);
+        let mut server_write_secret = [0u8; 20];
+        server_write_secret.copy_from_slice(&key_block[20..40]);
 
         let mut client_write_key = [0u8; 16];
-        client_write_key.clone_from_slice(&key_block[32..48]);
+        client_write_key.copy_from_slice(&key_block[40..56]);
         let mut server_write_key = [0u8; 16];
-        server_write_key.clone_from_slice(&key_block[48..64]);
-
-        let client_write_key = get_final_key(&client_write_key, client_random, server_random);
-        let server_write_key = get_final_key(&server_write_key, server_random, client_random);
+        server_write_key.copy_from_slice(&key_block[56..72]);
 
         println!("Secrets: ");
         println!("{client_write_secret:?}");
@@ -356,8 +350,8 @@ where
 pub enum MessageProcessor {
     None,
     RC4 {
-        server_mac_secret: [u8; 16],
-        client_mac_secret: [u8; 16],
+        server_mac_secret: [u8; 20],
+        client_mac_secret: [u8; 20],
         read_key: Rc4<U16>,
         write_key: Rc4<U16>,
     },
@@ -417,10 +411,8 @@ impl MessageProcessor {
                 ..
             } => {
                 let mut payload = message.payload.to_vec();
-                read_key.apply_keystream(&mut payload);
-
                 println!("{payload:?}");
-
+                read_key.apply_keystream(&mut payload);
                 let mac = &payload[payload.len() - 20..];
                 let payload = payload[..payload.len() - 20].to_vec();
                 println!("{mac:?}");

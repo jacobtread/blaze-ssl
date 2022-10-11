@@ -1,14 +1,4 @@
-use crate::codec::RandomBytes;
-use crate::stream::{CombinedRandom, MasterKey, PreMasterKey};
 use sha1_smol::Sha1;
-
-pub fn get_final_key(write_key: &[u8; 16], sr: &[u8; 32], cr: &[u8; 32]) -> [u8; 16] {
-    let mut out = md5::Context::new();
-    out.consume(write_key);
-    out.consume(sr);
-    out.consume(cr);
-    out.compute().0
-}
 
 pub fn generate_key_block(out: &mut [u8], pm: &[u8], sr: &[u8; 32], cr: &[u8; 32]) {
     let mut randoms = [0u8; 64];
