@@ -1,10 +1,12 @@
 extern crate core;
 
 use codec::Certificate;
+use rc4::{Key, KeyInit, Rc4};
 use rsa::pkcs8::DecodePrivateKey;
 use rsa::RsaPrivateKey;
 use std::net::TcpListener;
 use std::thread;
+use rc4::cipher::BlockDecryptMut;
 use stream::SslStream;
 
 pub mod codec;
@@ -53,6 +55,10 @@ gIFf
 ";
 
 fn main() {
+    let rc4 = Rc4::new("".into());
+    rc4.
+    println!("{}", key.len());
+
     let key = RsaPrivateKey::from_pkcs8_pem(REDIRECTOR_KEY).expect("Failed to parse key");
 
     let cert = pem::parse(REDIRECTOR_CERT)

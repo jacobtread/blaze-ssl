@@ -242,6 +242,9 @@ impl Codec for Certificate {
     }
 }
 
+/// Contents of SSL Random
+pub type RandomBytes = [u8; 32];
+
 /// Structure representing a random slice of 32 bytes
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct SSLRandom(pub [u8; 32]);

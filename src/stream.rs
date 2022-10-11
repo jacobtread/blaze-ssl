@@ -1,12 +1,12 @@
-use crate::codec::{Certificate, SSLRandom};
+use crate::codec::{Certificate, RandomBytes, SSLRandom};
 use crate::handshake::HandshakePayload;
-use crate::hash::{compute_final_key, create_master_secret};
+use crate::hash::{generate_key_block, get_final_key};
 use crate::msgs::{
     fragment_message, BorrowedMessage, HandshakeJoiner, MessageDeframer, OpaqueMessage,
 };
 use crate::msgs::{Message, MessageType};
-use rc4::consts::U16;
-use rc4::{KeyInit, Rc4, StreamCipher};
+use rc4::consts::{U16, U4, U8};
+use rc4::{Key, KeyInit, Rc4, StreamCipher};
 use rsa::{PaddingScheme, RsaPrivateKey};
 use sha1_smol::Sha1;
 use std::io::{self, Read, Write};
@@ -163,8 +163,10 @@ pub struct HelloData {
 /// randoms values from the ClientKeyExchange
 #[derive(Debug)]
 pub struct ExchangeData {
-    master_key: MasterKey,
-    _randoms: CombinedRandom,
+    client_write_secret: [u8; 16],
+    server_write_secret: [u8; 16],
+    client_write_key: [u8; 16],
+    server_write_key: [u8; 16],
 }
 
 impl<S> HandshakingStream<S>
@@ -197,8 +199,8 @@ where
     /// once handshaking is complete
     pub fn handshake(mut self) -> Result<SslStream<S>, SslError> {
         let hello_data = self.accept_hello()?;
-        let exchange_data = self.accept_exchange(&hello_data)?;
-        self.accept_cipher_change(exchange_data, &hello_data)?;
+        let exchange_data = self.accept_exchange(hello_data)?;
+        self.accept_cipher_change(exchange_data)?;
         self.accept_finished()?;
 
         println!("Handshake completed success");
@@ -232,7 +234,7 @@ where
 
     /// Handles accepting the client key exchange and generating the master
     /// key from the provided encrypted pre-master key
-    fn accept_exchange(&mut self, hello: &HelloData) -> SslResult<ExchangeData> {
+    fn accept_exchange(&mut self, hello: HelloData) -> SslResult<ExchangeData> {
         println!("State = Exchange");
 
         let encrypted_pm_key = match self.next_handshake()? {
@@ -259,25 +261,50 @@ where
         randoms[..32].copy_from_slice(&hello.client_random.0);
         randoms[32..].copy_from_slice(&hello.server_random.0);
 
-        let master_key = create_master_secret(&pm_key, &randoms);
+        let server_random = &hello.server_random.0;
+        let client_random = &hello.client_random.0;
 
-        println!("Created master key: {master_key:?}");
+        let mut master_key = [0u8; 48];
+        generate_key_block(&mut master_key, &pm_key, client_random, server_random);
+
+        let mut key_block = [0u8; 64];
+        generate_key_block(&mut key_block, &master_key, server_random, client_random);
+
+        let mut client_write_secret = [0u8; 16];
+        client_write_secret.clone_from_slice(&key_block[0..16]);
+        let mut server_write_secret = [0u8; 16];
+        server_write_secret.clone_from_slice(&key_block[16..32]);
+
+        let mut client_write_key = [0u8; 16];
+        client_write_key.clone_from_slice(&key_block[32..48]);
+        let mut server_write_key = [0u8; 16];
+        server_write_key.clone_from_slice(&key_block[48..64]);
+
+        let client_write_key = get_final_key(&client_write_key, client_random, server_random);
+        let server_write_key = get_final_key(&server_write_key, server_random, client_random);
+
+        println!("Secrets: ");
+        println!("{client_write_secret:?}");
+        println!("{server_write_secret:?}");
+        println!("Keys: ");
+        println!("{client_write_key:?}");
+        println!("{server_write_key:?}");
+
+        println!("Created keys");
 
         println!("State -> Cipher Change");
 
         Ok(ExchangeData {
-            master_key,
-            _randoms: randoms,
+            client_write_secret,
+            server_write_secret,
+            client_write_key,
+            server_write_key,
         })
     }
 
     /// Handles changing over ciphers when the ChangeCipherSpec message is
     /// received
-    fn accept_cipher_change(
-        &mut self,
-        exchange_data: ExchangeData,
-        hello_data: &HelloData,
-    ) -> SslResult<()> {
+    fn accept_cipher_change(&mut self, exchange_data: ExchangeData) -> SslResult<()> {
         println!("State = Cipher Change");
 
         // Expect the client to change cipher spec
@@ -286,25 +313,16 @@ where
             _ => return Err(SslError::UnexpectedMessage),
         }
 
-        let master_key = exchange_data.master_key;
-        let client_write_key = compute_final_key(
-            &master_key[32..37],
-            &hello_data.client_random.0,
-            &hello_data.server_random.0,
-        );
-        let server_write_key = compute_final_key(
-            &master_key[37..42],
-            &hello_data.server_random.0,
-            &hello_data.client_random.0,
-        );
-
-        let client_write_key = Rc4::new_from_slice(&client_write_key).unwrap();
-        let server_write_key = Rc4::new_from_slice(&server_write_key).unwrap();
+        let client_write_key = Key::<U16>::from_slice(&exchange_data.server_write_key);
+        let client_write_key = Rc4::new(client_write_key);
+        let server_write_key = Key::<U16>::from_slice(&exchange_data.client_write_key);
+        let server_write_key = Rc4::new(server_write_key);
 
         println!("Created RC4 keys from master key. Switching to CipherSpec");
 
         self.stream.processor = MessageProcessor::RC4 {
-            master_key,
+            client_mac_secret: exchange_data.client_write_secret,
+            server_mac_secret: exchange_data.server_write_secret,
             read_key: client_write_key,
             write_key: server_write_key,
         };
@@ -338,25 +356,11 @@ where
 pub enum MessageProcessor {
     None,
     RC4 {
-        master_key: MasterKey,
+        server_mac_secret: [u8; 16],
+        client_mac_secret: [u8; 16],
         read_key: Rc4<U16>,
         write_key: Rc4<U16>,
     },
-}
-
-/// Get the 16 byte write secret used for creating macs
-#[inline]
-fn write_secret_client(key: &MasterKey) -> &[u8] {
-    // Client [0..16]
-    &key[0..16]
-}
-
-/// Get the 16 byte write secret used for creating macs
-#[inline]
-fn write_secret_server(key: &MasterKey) -> &[u8] {
-    // Client [0..16]
-    // Server [16..32]
-    &key[16..32]
 }
 
 impl MessageProcessor {
@@ -386,11 +390,11 @@ impl MessageProcessor {
             },
             MessageProcessor::RC4 {
                 write_key,
-                master_key,
+                server_mac_secret,
                 ..
             } => {
                 let mut payload = message.payload.to_vec();
-                let mac = Self::compute_mac(write_secret_server(master_key), &payload, seq);
+                let mac = Self::compute_mac(server_mac_secret, &payload, seq);
                 payload.extend_from_slice(&mac);
                 write_key.apply_keystream(&mut payload);
                 OpaqueMessage {
@@ -409,7 +413,7 @@ impl MessageProcessor {
             },
             MessageProcessor::RC4 {
                 read_key,
-                master_key,
+                client_mac_secret,
                 ..
             } => {
                 let mut payload = message.payload.to_vec();
@@ -422,8 +426,7 @@ impl MessageProcessor {
                 println!("{mac:?}");
                 println!("{payload:?}");
 
-                let expected_mac =
-                    Self::compute_mac(write_secret_client(master_key), &payload, seq);
+                let expected_mac = Self::compute_mac(client_mac_secret, &payload, seq);
 
                 println!("Decrypted message: \nMac: {mac:?}\nExpected Mac: {expected_mac:?}");
 
