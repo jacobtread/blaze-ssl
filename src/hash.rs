@@ -1,35 +1,36 @@
 use crate::stream::{CombinedRandom, MasterKey, PreMasterKey};
 use sha1_smol::Sha1;
 
-pub fn create_master_secret(pre: &PreMasterKey, randoms: &CombinedRandom) -> MasterKey {
-    let mut out = [0u8; 48];
-    let mut tag = create_sha_tag(pre, randoms);
-    out[0..16].copy_from_slice(&create_md5_tag(pre, &tag));
-    tag = create_sha_tag(pre, &tag);
-    out[16..32].copy_from_slice(&create_md5_tag_2(pre, &tag, randoms));
-    tag = create_sha_tag(pre, &tag);
-    out[32..48].copy_from_slice(&create_md5_tag_2(pre, &tag, randoms));
-    out
-}
-
-pub fn create_sha_tag(key: &PreMasterKey, randoms: &[u8]) -> [u8; 20] {
-    let mut out = Sha1::new();
-    out.update(key);
-    out.update(randoms);
-    out.digest().bytes()
-}
-
-pub fn create_md5_tag(key: &[u8; 48], value: &[u8]) -> [u8; 16] {
+pub fn compute_final_key(key_slice: &[u8], first: &[u8], second: &[u8]) -> [u8; 16] {
     let mut out = md5::Context::new();
-    out.consume(key);
-    out.consume(value);
+    out.consume(key_slice);
+    out.consume(first);
+    out.consume(second);
     out.compute().0
 }
 
-pub fn create_md5_tag_2(key: &[u8; 48], value: &[u8], value_2: &[u8]) -> [u8; 16] {
+pub fn create_master_secret(pm: &PreMasterKey, rand: &CombinedRandom) -> MasterKey {
+    let mut out = [0u8; 48];
+    let mut tag = create_tag_sha(&[], pm, rand);
+    for chunk in out.chunks_mut(16) {
+        let value = create_md5_value(pm, &tag);
+        chunk.copy_from_slice(&value);
+        tag = create_tag_sha(&tag, pm, rand);
+    }
+    out
+}
+
+fn create_tag_sha(prev: &[u8], pm: &PreMasterKey, rand: &[u8]) -> [u8; 20] {
+    let mut out = Sha1::new();
+    out.update(prev);
+    out.update(pm);
+    out.update(rand);
+    out.digest().bytes()
+}
+
+fn create_md5_value(pm: &PreMasterKey, tag: &[u8]) -> [u8; 16] {
     let mut out = md5::Context::new();
-    out.consume(key);
-    out.consume(value);
-    out.consume(value_2);
+    out.consume(pm);
+    out.consume(tag);
     out.compute().0
 }
