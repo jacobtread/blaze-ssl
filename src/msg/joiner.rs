@@ -3,7 +3,7 @@ use crate::msg::enums::ContentType;
 use crate::msg::handshake::HandshakePayload;
 use crate::msg::payload::Payload;
 use crate::msg::types::ProtocolVersion;
-use crate::msg::RawMessage;
+use crate::msg::{Message, OpaqueMessage};
 use std::collections::VecDeque;
 
 const HEADER_SIZE: usize = 1 + 3;
@@ -63,7 +63,7 @@ impl HandshakeJoiner {
     /// Returns None if msg or a preceding message was corrupt.
     /// You cannot recover from this situation.  Otherwise returns
     /// a count of how many messages we queued.
-    pub fn take_message(&mut self, msg: RawMessage) -> Option<usize> {
+    pub fn next_message(&mut self, msg: Message) -> Option<usize> {
         // The vast majority of the time `self.buf` will be empty since most
         // handshake messages arrive in a single fragment. Avoid allocating and
         // copying in that common case.

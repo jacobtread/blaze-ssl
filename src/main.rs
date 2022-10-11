@@ -7,9 +7,9 @@ use rsa::RsaPrivateKey;
 use std::net::TcpListener;
 use std::thread;
 
+pub mod hash;
 pub(crate) mod msg;
 pub mod stream;
-pub(crate) mod vecbuf;
 
 /// The private key used by the redirector
 const REDIRECTOR_KEY: &'static str = "-----BEGIN PRIVATE KEY-----

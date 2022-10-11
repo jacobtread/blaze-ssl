@@ -1,5 +1,5 @@
 use crate::msg::codec::{Codec, Reader};
-use crate::msg::{BorrowedMessage, MessageError, RawMessage};
+use crate::msg::{BorrowedMessage, Message, MessageError, OpaqueMessage};
 use std::collections::VecDeque;
 use std::io;
 use std::io::Read;
@@ -9,7 +9,7 @@ pub const MAX_FRAGMENT_LEN: usize = 16384;
 /// Fragments the provided message into an iterator
 /// of borrowed messages that fit the same chunks
 pub fn fragment_message<'a>(
-    message: &'a RawMessage,
+    message: &'a Message,
 ) -> impl Iterator<Item = BorrowedMessage<'a>> + 'a {
     message
         .payload
@@ -24,13 +24,13 @@ pub fn fragment_message<'a>(
 /// into messages when they are ready
 pub struct MessageDeframer {
     /// Queue of messages that were parsed.
-    pub messages: VecDeque<RawMessage>,
+    pub messages: VecDeque<OpaqueMessage>,
     /// Set to true if the received messages seem to not be TLS
     /// or are broken in some unrepairable way. Connection
     /// should be terminated
     pub invalid: bool,
     /// Buffer containing the currently accumulated message bytes
-    buffer: Box<[u8; RawMessage::MAX_WIRE_SIZE]>,
+    buffer: Box<[u8; OpaqueMessage::MAX_WIRE_SIZE]>,
     /// The amount of the buffer that has been used.
     used: usize,
 }
@@ -51,7 +51,7 @@ impl MessageDeframer {
         Self {
             messages: VecDeque::new(),
             invalid: false,
-            buffer: Box::new([0u8; RawMessage::MAX_WIRE_SIZE]),
+            buffer: Box::new([0u8; OpaqueMessage::MAX_WIRE_SIZE]),
             used: 0,
         }
     }
@@ -82,7 +82,7 @@ impl MessageDeframer {
 
     fn try_deframe(&mut self) -> BufferAction {
         let mut reader = Reader::new(&self.buffer[..self.used]);
-        match RawMessage::decode(&mut reader) {
+        match OpaqueMessage::decode(&mut reader) {
             Ok(message) => {
                 let used = reader.cursor();
                 self.messages.push_back(message);

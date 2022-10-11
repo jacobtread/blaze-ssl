@@ -20,7 +20,22 @@ pub mod types;
 /// content type, protocol version and the content
 /// bytes
 #[derive(Debug)]
-pub struct RawMessage {
+pub struct OpaqueMessage {
+    pub content_type: ContentType,
+    pub payload: Vec<u8>,
+}
+
+impl Into<OpaqueMessage> for Message {
+    fn into(self) -> OpaqueMessage {
+        OpaqueMessage {
+            content_type: self.content_type,
+            payload: self.payload,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Message {
     pub content_type: ContentType,
     pub payload: Vec<u8>,
 }
@@ -39,8 +54,8 @@ pub enum MessageError {
     IllegalProtocolVersion,
 }
 
-impl RawMessage {
-    fn encode(&self) -> Vec<u8> {
+impl OpaqueMessage {
+    pub(crate) fn encode(&self) -> Vec<u8> {
         let length = self.payload.len();
         let mut output = Vec::with_capacity(5 + length);
         self.content_type.encode(&mut output);
@@ -85,7 +100,7 @@ impl<'a> BorrowedMessage<'a> {
     }
 }
 
-impl RawMessage {
+impl OpaqueMessage {
     /// This is the maximum on-the-wire size of a TLSCiphertext.
     /// That's 2^14 payload bytes, a header, and a 2KB allowance
     /// for ciphertext overheads.

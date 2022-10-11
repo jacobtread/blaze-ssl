@@ -1,50 +1,63 @@
+use crate::msg::{BorrowedMessage, Message, OpaqueMessage};
 use derive_more::From;
 use rc4::cipher::{BlockDecryptMut, StreamCipherError};
-use rc4::consts::{U1, U16};
+use rc4::consts::U16;
 use rc4::{KeyInit, Rc4, StreamCipher};
 use std::error::Error;
+use std::rc::Rc;
 
 #[derive(Debug, From)]
 pub enum CryptError {
     StreamCipherError(StreamCipherError),
 }
 
-pub trait Crypt {
-    fn encrypt(&mut self, input: &mut [u8]);
-
-    fn decrypt(&mut self, input: &mut [u8]);
+/// Structure representing known types for encoding and decoding messages
+pub enum MessageProcessor {
+    None,
+    RC4 {
+        read_key: Rc4<U16>,
+        write_key: Rc4<U16>,
+    },
 }
 
-pub struct RC4Encryptor {
-    cipher: Rc4<U16>,
-}
+impl MessageProcessor {
+    pub fn encrypt(&mut self, message: BorrowedMessage) -> OpaqueMessage {
+        match self {
+            MessageProcessor::None => OpaqueMessage {
+                content_type: message.content_type,
+                payload: message.payload.to_vec(),
+            },
+            MessageProcessor::RC4 { write_key, .. } => {
+                let mut payload = message.payload.to_vec();
+                write_key.apply_keystream(&mut payload);
 
-impl RC4Encryptor {
-    pub fn new(cipher: Rc4<U16>) -> Self {
-        Self { cipher }
+                // TODO: Write mac
+
+                OpaqueMessage {
+                    content_type: message.content_type,
+                    payload,
+                }
+            }
+        }
     }
-}
 
-impl Crypt for RC4Encryptor {
-    fn encrypt(&mut self, input: &mut [u8]) {
-        self.cipher.apply_keystream(input);
+    pub fn decrypt(&mut self, message: OpaqueMessage) -> Message {
+        match self {
+            MessageProcessor::None => Message {
+                content_type: message.content_type,
+                payload: message.payload,
+            },
+            MessageProcessor::RC4 { read_key, .. } => {
+                let mut payload = message.payload.to_vec();
+                read_key.apply_keystream(&mut payload);
+
+                // TODO: Remove mac
+
+                Message {
+                    content_type: message.content_type,
+                    payload,
+                }
+            }
+        }
     }
-
-    fn decrypt(&mut self, input: &mut [u8]) {
-        self.cipher.apply_keystream(input);
-    }
-}
-
-pub struct PlainTextEncryptor;
-
-impl PlainTextEncryptor {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-impl Crypt for PlainTextEncryptor {
-    fn encrypt(&mut self, _: &mut [u8]) {}
-
-    fn decrypt(&mut self, _: &mut [u8]) {}
 }

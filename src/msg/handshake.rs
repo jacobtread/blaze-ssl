@@ -3,7 +3,7 @@ use crate::msg::data::Certificate;
 use crate::msg::enums::CipherSuite::{SSL_NULL_WITH_NULL_NULL, TLS_RSA_WITH_RC4_128_SHA};
 use crate::msg::enums::{CipherSuite, ContentType};
 use crate::msg::types::{ProtocolVersion, SSLRandom, SSL_V3};
-use crate::msg::RawMessage;
+use crate::msg::{Message, OpaqueMessage};
 use std::io::Read;
 
 #[derive(Debug)]
@@ -40,9 +40,9 @@ impl HandshakePayload {
         }
     }
 
-    pub fn as_message(&self) -> RawMessage {
+    pub fn as_message(&self) -> Message {
         let payload = self.encode();
-        RawMessage {
+        Message {
             content_type: ContentType::Handshake,
             payload,
         }
@@ -111,10 +111,10 @@ impl HandshakePayload {
     }
 }
 
-impl Into<RawMessage> for HandshakePayload {
-    fn into(self) -> RawMessage {
+impl Into<OpaqueMessage> for HandshakePayload {
+    fn into(self) -> OpaqueMessage {
         let payload = self.encode();
-        RawMessage {
+        OpaqueMessage {
             content_type: ContentType::Handshake,
             payload,
         }
