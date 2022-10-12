@@ -1,3 +1,4 @@
+use std::cmp;
 use crate::codec::{Certificate, SSLRandom};
 use crate::constants::PROTOCOL_SSL3;
 use crate::handshake::{HandshakeHashBuffer, HandshakePayload};
@@ -9,7 +10,7 @@ use crate::msgs::{Message, MessageType};
 use crypto::rc4::Rc4;
 use crypto::symmetriccipher::SynchronousStreamCipher;
 use rsa::{PaddingScheme, RsaPrivateKey};
-use std::io::{self, Read, Write};
+use std::io::{self, ErrorKind, Read, Write};
 use lazy_static::lazy_static;
 
 lazy_static! {
@@ -73,6 +74,9 @@ pub struct SslStream<S> {
     deframer: MessageDeframer,
     read_processor: ReadProcessor,
     write_processor: WriteProcessor,
+
+    read_buffer: Vec<u8>,
+    write_buffer: Vec<u8>,
 }
 
 impl<S> SslStream<S> {
@@ -113,7 +117,9 @@ impl<S> SslStream<S>
             read_seq: 0,
             deframer: MessageDeframer::new(),
             read_processor: ReadProcessor::None,
-            write_processor: WriteProcessor::None
+            write_processor: WriteProcessor::None,
+            write_buffer: Vec::new(),
+            read_buffer: Vec::new(),
         };
         let handshaking = HandshakingStream {
             stream,
@@ -151,29 +157,58 @@ impl<S> SslStream<S>
         }
         Ok(())
     }
+
+
+    pub fn fill_app_data(&mut self) -> io::Result<usize> {
+        let buffer_len = self.read_buffer.len();
+        let count = if buffer_len == 0 {
+            let message = self.next_message()
+                .map_err(|_| io::Error::new(ErrorKind::Other, "Ssl Failure"))?;
+            if message.message_type != MessageType::ApplicationData {
+                return Err(io::Error::new(ErrorKind::Other, "Non application data read"));
+            }
+            let payload = message.payload;
+            self.read_buffer.extend_from_slice(&payload);
+            payload.len()
+        } else {
+            buffer_len
+        };
+        Ok(count)
+    }
 }
 
 impl<S> Write for SslStream<S>
     where
-        S: Write,
+        S: Read + Write,
 {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        // TODO: Convert application data to messages
-        self.stream.write(&buf)
+        self.write_buffer.extend_from_slice(buf);
+        Ok(buf.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
+        let message = Message {
+            message_type: MessageType::ApplicationData,
+            payload: self.write_buffer.split_off(0),
+        };
+        self.write_message(message)?;
         self.stream.flush()
     }
 }
 
 impl<S> Read for SslStream<S>
     where
-        S: Read,
+        S: Read + Write,
 {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        // TODO: Read from application data messages
-        self.stream.read(buf)
+        let count = self.fill_app_data()?;
+        let read = cmp::min(buf.len(), count);
+        if read > 0 {
+            let new_buffer = self.read_buffer.split_off(read);
+            buf[..read].copy_from_slice(&self.read_buffer);
+            self.read_buffer = new_buffer;
+        }
+        Ok(read)
     }
 }
 
@@ -373,7 +408,7 @@ impl<S> HandshakingStream<S>
         mac_secret.copy_from_slice(&state.client_write_secret);
         self.stream.read_processor = ReadProcessor::RC4 {
             mac_secret,
-            key
+            key,
         };
         Ok(())
     }
@@ -386,7 +421,7 @@ impl<S> HandshakingStream<S>
                 if !self.check_client_hashes(&state.master_key, md5_hash, sha_hash) {
                     return Err(SslError::Failure);
                 }
-            },
+            }
             _ => return Err(SslError::UnexpectedMessage),
         };
 
@@ -413,7 +448,7 @@ impl<S> HandshakingStream<S>
         mac_secret.copy_from_slice(&state.server_write_secret);
         self.stream.write_processor = WriteProcessor::RC4 {
             mac_secret,
-            key
+            key,
         };
         Ok(())
     }
@@ -442,7 +477,6 @@ impl<S> HandshakingStream<S>
 }
 
 
-
 /// Handler for processing messages that need to be written
 /// converts them to writing messages
 pub enum WriteProcessor {
@@ -451,12 +485,11 @@ pub enum WriteProcessor {
     /// RC4 Encryption processor which encrypts the message before converting
     RC4 {
         key: Rc4,
-        mac_secret: [u8; 16]
-    }
+        mac_secret: [u8; 16],
+    },
 }
 
 impl WriteProcessor {
-
     /// Processes the provided message using the underlying method and creates an
     /// Opaque message that can be written from it.
     ///
@@ -467,7 +500,7 @@ impl WriteProcessor {
             // NO-OP directly convert message into output
             WriteProcessor::None => OpaqueMessage {
                 message_type: message.message_type,
-                payload: message.payload.to_vec()
+                payload: message.payload.to_vec(),
             },
             // RC4 Encryption
             WriteProcessor::RC4 { key, mac_secret } => {
@@ -479,7 +512,7 @@ impl WriteProcessor {
                 key.process(&payload, &mut payload_enc);
                 OpaqueMessage {
                     message_type: message.message_type,
-                    payload: payload_enc
+                    payload: payload_enc,
                 }
             }
         }
@@ -494,8 +527,8 @@ pub enum ReadProcessor {
     /// RC4 Decryption processor which decrypts the message before converting
     RC4 {
         key: Rc4,
-        mac_secret: [u8; 16]
-    }
+        mac_secret: [u8; 16],
+    },
 }
 
 #[derive(Debug)]
@@ -527,7 +560,7 @@ impl ReadProcessor {
                 let expected_mac = compute_mac(mac_secret, message.message_type.value(), &payload, seq);
 
                 if !expected_mac.eq(mac) {
-                    return Err(DecryptError::InvalidMac)
+                    return Err(DecryptError::InvalidMac);
                 }
 
                 Message {

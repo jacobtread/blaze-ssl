@@ -13,9 +13,6 @@ mod test {
     use std::thread;
     use std::thread::sleep;
     use std::time::Duration;
-    use rsa::pkcs8::DecodePrivateKey;
-    use rsa::RsaPrivateKey;
-    use crate::codec::Certificate;
     use crate::stream::SslStream;
 
     #[test]
