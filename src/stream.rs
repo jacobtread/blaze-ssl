@@ -58,6 +58,18 @@ pub struct BlazeStream<S> {
     stopped: bool,
 }
 
+impl<S> BlazeStream<S> {
+    /// Get a reference to the underlying stream
+    pub fn get_ref(&self) -> &S {
+        return &self.stream;
+    }
+
+    /// Get a mutable reference to the underlying stream
+    pub fn get_mut(&mut self) -> &mut S {
+        return &mut self.stream;
+    }
+}
+
 #[derive(Debug)]
 pub enum BlazeError {
     IO(io::Error),
