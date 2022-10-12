@@ -1,11 +1,17 @@
-use std::io::{Read, Write};
+use crate::codec::SSLRandom;
+use crate::crypto::{
+    compute_finished_md5, compute_finished_sha, create_crypto_state, CryptographicState,
+    FinishedSender,
+};
+use crate::handshake::{HandshakePayload, Transcript};
+use crate::msgs::{FatalAlert, HandshakeJoiner, Message, MessageType};
+use crate::stream::{
+    BlazeError, BlazeResult, BlazeStream, ReadProcessor, WriteProcessor, SERVER_CERTIFICATE,
+    SERVER_KEY,
+};
 use crypto::rc4::Rc4;
 use rsa::PaddingScheme;
-use crate::codec::SSLRandom;
-use crate::handshake::{HandshakePayload, Transcript};
-use crate::crypto::{compute_finished_md5, compute_finished_sha, create_crypto_state, CryptographicState, FinishedSender};
-use crate::msgs::{FatalAlert, HandshakeJoiner, Message, MessageType};
-use crate::stream::{BlazeError, BlazeResult, BlazeStream, ReadProcessor, SERVER_CERTIFICATE, SERVER_KEY, WriteProcessor};
+use std::io::{Read, Write};
 
 /// Stream wrapper where the client and server are in the
 /// handshaking process. Provides additional structures for
@@ -25,16 +31,16 @@ pub struct HelloData {
 }
 
 impl<S> ServerHandshake<S>
-    where
-        S: Read + Write,
+where
+    S: Read + Write,
 {
     /// Handles handshaking returning the underlying stream for use
     /// once handshaking is complete
     pub fn handshake(stream: BlazeStream<S>) -> Result<BlazeStream<S>, BlazeError> {
-        let mut value= ServerHandshake {
+        let mut value = ServerHandshake {
             stream,
             joiner: HandshakeJoiner::new(),
-            transcript: Transcript::new()
+            transcript: Transcript::new(),
         };
         let hello_data = value.accept_hello()?;
         let state = value.accept_exchange(hello_data)?;
@@ -70,15 +76,12 @@ impl<S> ServerHandshake<S>
     /// a struct containing the client and server randoms
     fn accept_hello(&mut self) -> BlazeResult<HelloData> {
         let client_random = match self.next_handshake()? {
-            HandshakePayload::ClientHello( random) => random,
+            HandshakePayload::ClientHello(random) => random,
             _ => return Err(self.stream.alert_fatal(FatalAlert::UnexpectedMessage)),
         };
 
-        let server_random = SSLRandom::new()
-            .map_err(|_| {
-                println!("SSL Random fail");
-                self.stream.alert_fatal(FatalAlert::IllegalParameter)
-            })?;
+        let server_random =
+            SSLRandom::new().map_err(|_| self.stream.alert_fatal(FatalAlert::IllegalParameter))?;
 
         // Send server hello, certificate, and server done
         self.emit_server_hello(server_random.clone())?;
@@ -93,8 +96,7 @@ impl<S> ServerHandshake<S>
 
     /// Emits the server hello message
     fn emit_server_hello(&mut self, server_random: SSLRandom) -> BlazeResult<()> {
-        let message = HandshakePayload::ServerHello(server_random)
-            .as_message();
+        let message = HandshakePayload::ServerHello(server_random).as_message();
         self.transcript.push_msg(&message);
         self.stream.write_message(message)?;
         Ok(())
@@ -103,8 +105,7 @@ impl<S> ServerHandshake<S>
     /// Emit the server certificate message with a copy of the
     /// server certificate
     fn emit_server_certificate(&mut self) -> BlazeResult<()> {
-        let message = HandshakePayload::Certificate(SERVER_CERTIFICATE.clone())
-            .as_message();
+        let message = HandshakePayload::Certificate(SERVER_CERTIFICATE.clone()).as_message();
         self.transcript.push_msg(&message);
         self.stream.write_message(message)?;
         Ok(())
@@ -112,8 +113,7 @@ impl<S> ServerHandshake<S>
 
     /// Emits the server hello done handshake payload
     fn emit_server_hello_done(&mut self) -> BlazeResult<()> {
-        let message = HandshakePayload::ServerHelloDone
-            .as_message();
+        let message = HandshakePayload::ServerHelloDone.as_message();
         self.transcript.push_msg(&message);
         self.stream.write_message(message)?;
         Ok(())
@@ -129,11 +129,7 @@ impl<S> ServerHandshake<S>
 
         let pm_key = SERVER_KEY
             .decrypt(PaddingScheme::PKCS1v15Encrypt, &encrypted_pm_key)
-            .map_err(|_| {
-                println!("Failed to decrypt pm key");
-                self.stream.alert_fatal(FatalAlert::IllegalParameter)
-            })?;
-
+            .map_err(|_| self.stream.alert_fatal(FatalAlert::IllegalParameter))?;
 
         let client_random = &hello.client_random.0;
         let server_random = &hello.server_random.0;
@@ -160,7 +156,7 @@ impl<S> ServerHandshake<S>
         self.stream.read_processor = ReadProcessor::RC4 {
             mac_secret,
             key,
-            seq: 0
+            seq: 0,
         };
         Ok(())
     }
@@ -171,7 +167,6 @@ impl<S> ServerHandshake<S>
         match self.next_handshake()? {
             HandshakePayload::Finished(md5_hash, sha_hash) => {
                 if !self.check_client_hashes(&state.master_key, md5_hash, sha_hash) {
-                    println!("Finished hashes not matching");
                     return Err(self.stream.alert_fatal(FatalAlert::IllegalParameter));
                 }
             }
@@ -202,16 +197,23 @@ impl<S> ServerHandshake<S>
         self.stream.write_processor = WriteProcessor::RC4 {
             mac_secret,
             key,
-            seq: 0
+            seq: 0,
         };
         Ok(())
     }
 
     /// Computes and compares the client hashes for the handshaking process returning
     /// whether they are matching hashes
-    fn check_client_hashes(&mut self, master_key: &[u8; 48], md5_hash: [u8; 16], sha_hash: [u8; 20]) -> bool {
-        let exp_md5_hash = compute_finished_md5(master_key, FinishedSender::Client, &self.transcript.client);
-        let exp_sha_hash = compute_finished_sha(master_key, FinishedSender::Client, &self.transcript.client);
+    fn check_client_hashes(
+        &mut self,
+        master_key: &[u8; 48],
+        md5_hash: [u8; 16],
+        sha_hash: [u8; 20],
+    ) -> bool {
+        let exp_md5_hash =
+            compute_finished_md5(master_key, FinishedSender::Client, &self.transcript.client);
+        let exp_sha_hash =
+            compute_finished_sha(master_key, FinishedSender::Client, &self.transcript.client);
         exp_md5_hash == md5_hash && exp_sha_hash == sha_hash
     }
 
@@ -220,11 +222,12 @@ impl<S> ServerHandshake<S>
     fn emit_finished(&mut self, state: &CryptographicState) -> BlazeResult<()> {
         let master_key = &state.master_key;
 
-        let server_md5_hash = compute_finished_md5(master_key, FinishedSender::Server, &self.transcript.full);
-        let server_sha_hash = compute_finished_sha(master_key, FinishedSender::Server, &self.transcript.full);
+        let server_md5_hash =
+            compute_finished_md5(master_key, FinishedSender::Server, &self.transcript.full);
+        let server_sha_hash =
+            compute_finished_sha(master_key, FinishedSender::Server, &self.transcript.full);
 
-        let message = HandshakePayload::Finished(server_md5_hash, server_sha_hash)
-            .as_message();
+        let message = HandshakePayload::Finished(server_md5_hash, server_sha_hash).as_message();
         self.stream.write_message(message)?;
         Ok(())
     }

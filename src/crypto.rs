@@ -70,7 +70,7 @@ pub fn generate_key_block(out: &mut [u8], pm: &[u8], rand_1: &[u8; 32], rand_2: 
     }
 }
 
-pub fn compute_mac(write_secret: &[u8], ty: u8, message: &[u8], seq: u64) -> [u8; 20] {
+pub fn compute_mac(write_secret: &[u8], ty: u8, message: &[u8], seq: &u64) -> [u8; 20] {
     let mut digest = Sha1::new();
     let mut out = [0u8; 20];
     let pad1 = [0x36; 40];

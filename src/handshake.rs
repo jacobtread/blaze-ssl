@@ -133,8 +133,7 @@ impl HandshakePayload {
                 let server_random = SSLRandom::decode(&mut contents)?;
 
                 let _session = decode_vec_u8::<u8>(&mut contents)?;
-                let cipher_suite = u16::decode(&mut contents)?;
-                println!("Chosen Cipher: {}", cipher_suite);
+                let _cipher_suite = u16::decode(&mut contents)?;
 
                 let _compression_method = contents.take_byte()?;
 

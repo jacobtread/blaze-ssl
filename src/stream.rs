@@ -140,14 +140,12 @@ impl<S> BlazeStream<S>
                 if message.message_type == MessageType::Alert {
                     let mut reader = Reader::new(&message.payload);
                     if let Some(alert) = Alert::decode(&mut reader) {
-                        println!("Hit alert {alert:?}");
                         self.handle_alert(alert);
                         continue;
                     } else {
                         reader.reset();
                         let fatal = FatalAlert::decode(&mut reader)
                             .unwrap_or(FatalAlert::Unknown);
-                        println!("Server gave fatal: {fatal:?}");
                         return Err(self.handle_fatal(fatal));
                     }
                 }
@@ -291,6 +289,7 @@ impl<S> Read for BlazeStream<S>
         if self.stopped {
             return Err(io_closed())
         }
+
         let read = cmp::min(buf.len(), count);
         if read > 0 {
             let new_buffer = self.read_buffer.split_off(read);
@@ -328,7 +327,7 @@ impl WriteProcessor {
                 payload: message.payload.to_vec(),
             },
             // RC4 Encryption
-            WriteProcessor::RC4 { key, mac_secret, mut seq } => {
+            WriteProcessor::RC4 { key, mac_secret, seq } => {
                 let mut payload = message.payload.to_vec();
                 let mac = compute_mac(mac_secret, message.message_type.value(), &payload, seq);
                 payload.extend_from_slice(&mac);
@@ -336,7 +335,7 @@ impl WriteProcessor {
                 let mut payload_enc = vec![0u8; payload.len()];
                 key.process(&payload, &mut payload_enc);
 
-                seq += 1;
+                *seq += 1;
 
                 OpaqueMessage {
                     message_type: message.message_type,
@@ -378,7 +377,7 @@ impl ReadProcessor {
                 payload: message.payload,
             },
             // RC4 Decryption
-            ReadProcessor::RC4 { key, mac_secret, mut seq } => {
+            ReadProcessor::RC4 { key, mac_secret, seq } => {
                 let mut payload_and_mac = vec![0u8; message.payload.len()];
                 key.process(&message.payload, &mut payload_and_mac);
 
@@ -389,12 +388,10 @@ impl ReadProcessor {
                 let expected_mac = compute_mac(mac_secret, message.message_type.value(), &payload, seq);
 
                 if !expected_mac.eq(mac) {
-                    println!("{mac:?}");
-                    println!("{expected_mac:?}");
                     return Err(DecryptError::InvalidMac);
                 }
 
-                seq += 1;
+                *seq += 1;
 
                 Message {
                     message_type: message.message_type,
