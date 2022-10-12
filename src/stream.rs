@@ -14,18 +14,22 @@ use crate::server::ServerHandshake;
 lazy_static! {
     /// RSA private key used by the server
     pub static ref SERVER_KEY: RsaPrivateKey = {
-        let key_der = include_bytes!("key.der");
         use rsa::pkcs8::DecodePrivateKey;
         use rsa::RsaPrivateKey;
 
-        RsaPrivateKey::from_pkcs8_der(key_der)
+        let key_pem = include_str!("key.pem");
+        RsaPrivateKey::from_pkcs8_pem(key_pem)
             .expect("Failed to load redirector private key")
     };
 
     /// Certificate used by the server
     pub static ref SERVER_CERTIFICATE: Certificate = {
-        let cert_der = include_bytes!("cert.der");
-        Certificate(cert_der.to_vec())
+        use pem;
+        let cert_pem = include_str!("cert.pem");
+        let cert_bytes = pem::parse(cert_pem)
+            .expect("Unable to parse server certificate")
+            .contents;
+        Certificate(cert_bytes)
     };
 }
 

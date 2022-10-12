@@ -1,16 +1,17 @@
-use std::io::{Read, Write};
-use crypto::rc4::Rc4;
-use der::{Decode, Reader};
-use rsa::{BigUint, PaddingScheme, PublicKey, RsaPublicKey};
-use rsa::pkcs1::DecodeRsaPublicKey;
-use rsa::pkcs8::DecodePublicKey;
-use rsa::rand_core::{OsRng, RngCore};
 use crate::codec::{Certificate, SSLRandom};
 use crate::constants::PROTOCOL_SSL3;
+use crate::crypto::{
+    compute_finished_md5, compute_finished_sha, create_crypto_state, CryptographicState,
+    FinishedSender,
+};
 use crate::handshake::{HandshakePayload, Transcript};
-use crate::crypto::{compute_finished_md5, compute_finished_sha, create_crypto_state, CryptographicState, FinishedSender};
 use crate::msgs::{FatalAlert, HandshakeJoiner, Message, MessageType};
-use crate::stream::{BlazeError, BlazeResult, BlazeStream, ReadProcessor, WriteProcessor};
+use crate::stream::{BlazeError, BlazeResult, BlazeStream, ReadProcessor, WriteProcessor, SERVER_KEY};
+use crypto::rc4::Rc4;
+use der::Decode;
+use rsa::rand_core::{OsRng, RngCore};
+use rsa::{BigUint, PaddingScheme, PublicKey, RsaPublicKey};
+use std::io::{Read, Write};
 
 /// Stream wrapper where the client and server are in the
 /// handshaking process. Provides additional structures for
@@ -30,8 +31,8 @@ pub struct HelloData {
 }
 
 impl<S> ClientHandshake<S>
-    where
-        S: Read + Write,
+where
+    S: Read + Write,
 {
     /// Handles handshaking returning the underlying stream for use
     /// once handshaking is complete
@@ -58,6 +59,7 @@ impl<S> ClientHandshake<S>
         loop {
             if let Some(message) = self.joiner.next() {
                 let payload = message.payload;
+                println!("Appened client transcript: {payload:?}");
                 self.transcript.push_raw(&message.raw);
                 return Ok(payload);
             } else {
@@ -73,15 +75,13 @@ impl<S> ClientHandshake<S>
     /// Handles the hello portion of the handshaking processes returns
     /// a struct containing the client and server randoms
     fn emit_hello(&mut self) -> BlazeResult<HelloData> {
-        let client_random = SSLRandom::new()
-            .map_err(|_| {
-                println!("Client random fail");
-                self.stream.alert_fatal(FatalAlert::IllegalParameter)
-            })?;
+        let client_random = SSLRandom::new().map_err(|_| {
+            println!("Client random fail");
+            self.stream.alert_fatal(FatalAlert::IllegalParameter)
+        })?;
 
         // Send server hello, certificate, and server done
-        let message = HandshakePayload::ClientHello(client_random.clone())
-            .as_message();
+        let message = HandshakePayload::ClientHello(client_random.clone()).as_message();
         self.transcript.push_msg(&message);
         self.stream.write_message(message)?;
 
@@ -96,57 +96,58 @@ impl<S> ClientHandshake<S>
         })
     }
 
-    fn accept_hello_done(&mut self) -> BlazeResult<()> {
-       match self.next_handshake()? {
-            HandshakePayload::ServerHelloDone => { },
-            _ => {
-                println!("Server Done Not Got");
-                return Err(self.stream.alert_fatal(FatalAlert::UnexpectedMessage))
-            },
-        };
-        Ok(())
-    }
-
     fn accept_certificate(&mut self) -> BlazeResult<Certificate> {
         let certificate = match self.next_handshake()? {
             HandshakePayload::Certificate(cert) => cert,
             _ => {
                 println!("Not go Cert");
-                return Err(self.stream.alert_fatal(FatalAlert::UnexpectedMessage))
-            },
+                return Err(self.stream.alert_fatal(FatalAlert::UnexpectedMessage));
+            }
         };
         Ok(certificate)
     }
 
-    fn start_key_exchange(&mut self, hello: &HelloData, cert: &Certificate) -> BlazeResult<CryptographicState> {
+    fn accept_hello_done(&mut self) -> BlazeResult<()> {
+        match self.next_handshake()? {
+            HandshakePayload::ServerHelloDone => {}
+            _ => {
+                println!("Server Done Not Got");
+                return Err(self.stream.alert_fatal(FatalAlert::UnexpectedMessage));
+            }
+        };
+        Ok(())
+    }
+
+    fn start_key_exchange(
+        &mut self,
+        hello: &HelloData,
+        cert: &Certificate,
+    ) -> BlazeResult<CryptographicState> {
         let mut rng = OsRng;
         let mut pre_master_secret = [0u8; 48];
         pre_master_secret[0..2].copy_from_slice(&PROTOCOL_SSL3.to_be_bytes());
         rng.fill_bytes(&mut pre_master_secret[2..]);
 
         use x509_cert::Certificate as Cert2;
-        use RsaPublicKey as Rsa2;
 
-        let x509 = Cert2::from_der(&cert.0)
-            .map_err(|_| {
-                println!("X509 cert failed");
-                self.stream.alert_fatal(FatalAlert::IllegalParameter)
-            })?;
+        let x509 = Cert2::from_der(&cert.0).map_err(|_| {
+            println!("X509 cert failed");
+            self.stream.alert_fatal(FatalAlert::IllegalParameter)
+        })?;
 
         let pub_key_info = x509.tbs_certificate.subject_public_key_info;
-        let rsa_pub_key =pkcs1::RsaPublicKey::from_der(pub_key_info.subject_public_key)
-            .unwrap();
-
+        let rsa_pub_key = pkcs1::RsaPublicKey::from_der(pub_key_info.subject_public_key).unwrap();
 
         let modulus = BigUint::from_bytes_be(rsa_pub_key.modulus.as_bytes());
         let public_exponent = BigUint::from_bytes_be(rsa_pub_key.public_exponent.as_bytes());
 
-        let public_key = RsaPublicKey::new(modulus, public_exponent)
-            .map_err(|_| {
-                println!("Public key failed");
-                self.stream.alert_fatal(FatalAlert::IllegalParameter)
-            })?;
-        let pm_enc = public_key.encrypt(&mut rng, PaddingScheme::PKCS1v15Encrypt, &pre_master_secret)
+        let public_key = RsaPublicKey::new(modulus, public_exponent).map_err(|_| {
+            println!("Public key failed");
+            self.stream.alert_fatal(FatalAlert::IllegalParameter)
+        })?;
+
+        let pm_enc = public_key
+            .encrypt(&mut rng, PaddingScheme::PKCS1v15Encrypt, &pre_master_secret)
             .map_err(|_| {
                 println!("Public key encr failed");
                 self.stream.alert_fatal(FatalAlert::IllegalParameter)
@@ -159,8 +160,7 @@ impl<S> ClientHandshake<S>
     }
 
     fn emit_key_exchange(&mut self, pm_enc: Vec<u8>) -> BlazeResult<()> {
-        let message = HandshakePayload::ClientKeyExchange(pm_enc)
-            .as_message();
+        let message = HandshakePayload::ClientKeyExchange(pm_enc).as_message();
         self.transcript.push_msg(&message);
         self.stream.write_message(message)?;
         Ok(())
@@ -181,23 +181,25 @@ impl<S> ClientHandshake<S>
         let key = Rc4::new(&state.client_write_key);
         let mut mac_secret = [0u8; 16];
         mac_secret.copy_from_slice(&state.client_write_secret);
-        self.stream.write_processor = WriteProcessor::RC4 {
-            mac_secret,
-            key,
-        };
+        self.stream.write_processor = WriteProcessor::RC4 { mac_secret, key };
         Ok(())
     }
 
     fn emit_finished(&mut self, state: &CryptographicState) -> BlazeResult<()> {
         println!("Emit finish");
+
         let master_key = &state.master_key;
 
-        let md5_hash = compute_finished_md5(master_key, FinishedSender::Client, &self.transcript.full);
-        let sha_hash = compute_finished_sha(master_key, FinishedSender::Client, &self.transcript.full);
+        let md5_hash =
+            compute_finished_md5(master_key, FinishedSender::Client, &self.transcript.full);
+        let sha_hash =
+            compute_finished_sha(master_key, FinishedSender::Client, &self.transcript.full);
 
-        let message = HandshakePayload::Finished(md5_hash, sha_hash)
-            .as_message();
+        let message = HandshakePayload::Finished(md5_hash, sha_hash).as_message();
+        self.transcript.push_msg(&message);
         self.stream.write_message(message)?;
+        self.transcript.finish_client();
+
         Ok(())
     }
 
@@ -206,11 +208,11 @@ impl<S> ClientHandshake<S>
     fn accept_cipher_change(&mut self, state: &CryptographicState) -> BlazeResult<()> {
         // Expect the server to change cipher spec
         match self.stream.next_message()?.message_type {
-            MessageType::ChangeCipherSpec => { },
+            MessageType::ChangeCipherSpec => {}
             t => {
                 println!("Not got ccs {t:?}");
-                return Err(self.stream.alert_fatal(FatalAlert::UnexpectedMessage))
-            },
+                return Err(self.stream.alert_fatal(FatalAlert::UnexpectedMessage));
+            }
         };
         // Reset reads
         self.stream.read_seq = 0;
@@ -219,10 +221,7 @@ impl<S> ClientHandshake<S>
         let key = Rc4::new(&state.server_write_key);
         let mut mac_secret = [0u8; 16];
         mac_secret.copy_from_slice(&state.server_write_secret);
-        self.stream.read_processor = ReadProcessor::RC4 {
-            mac_secret,
-            key,
-        };
+        self.stream.read_processor = ReadProcessor::RC4 { mac_secret, key };
         Ok(())
     }
 
@@ -244,9 +243,23 @@ impl<S> ClientHandshake<S>
 
     /// Computes and compares the client hashes for the handshaking process returning
     /// whether they are matching hashes
-    fn check_server_hashes(&mut self, master_key: &[u8; 48], md5_hash: [u8; 16], sha_hash: [u8; 20]) -> bool {
-        let exp_md5_hash = compute_finished_md5(master_key, FinishedSender::Server, &self.transcript.full);
-        let exp_sha_hash = compute_finished_sha(master_key, FinishedSender::Server, &self.transcript.full);
+    fn check_server_hashes(
+        &mut self,
+        master_key: &[u8; 48],
+        md5_hash: [u8; 16],
+        sha_hash: [u8; 20],
+    ) -> bool {
+        println!("{:?}", &self.transcript.full.len());
+        println!("{:?}", &self.transcript.client.len());
+
+        let exp_md5_hash =
+            compute_finished_md5(master_key, FinishedSender::Server, &self.transcript.client);
+        let exp_sha_hash =
+            compute_finished_sha(master_key, FinishedSender::Server, &self.transcript.client);
+
+        println!("{exp_md5_hash:?}");
+        println!("{md5_hash:?}");
+
         exp_md5_hash == md5_hash && exp_sha_hash == sha_hash
     }
 }

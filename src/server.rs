@@ -75,7 +75,10 @@ impl<S> ServerHandshake<S>
         };
 
         let server_random = SSLRandom::new()
-            .map_err(|_| self.stream.alert_fatal(FatalAlert::IllegalParameter))?;
+            .map_err(|_| {
+                println!("SSL Random fail");
+                self.stream.alert_fatal(FatalAlert::IllegalParameter)
+            })?;
 
         // Send server hello, certificate, and server done
         self.emit_server_hello(server_random.clone())?;
@@ -126,7 +129,10 @@ impl<S> ServerHandshake<S>
 
         let pm_key = SERVER_KEY
             .decrypt(PaddingScheme::PKCS1v15Encrypt, &encrypted_pm_key)
-            .map_err(|_| self.stream.alert_fatal(FatalAlert::IllegalParameter))?;
+            .map_err(|_| {
+                println!("Failed to decrypt pm key");
+                self.stream.alert_fatal(FatalAlert::IllegalParameter)
+            })?;
 
 
         let client_random = &hello.client_random.0;
@@ -164,6 +170,7 @@ impl<S> ServerHandshake<S>
         match self.next_handshake()? {
             HandshakePayload::Finished(md5_hash, sha_hash) => {
                 if !self.check_client_hashes(&state.master_key, md5_hash, sha_hash) {
+                    println!("Finished hashes not matching");
                     return Err(self.stream.alert_fatal(FatalAlert::IllegalParameter));
                 }
             }
