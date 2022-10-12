@@ -13,7 +13,7 @@ mod test {
     use std::thread;
     use std::thread::sleep;
     use std::time::Duration;
-    use crate::stream::SslStream;
+    use crate::stream::BlazeStream;
 
     #[test]
     fn test() {
@@ -25,7 +25,7 @@ mod test {
             thread::spawn(move || {
                 let stream = stream.expect("Failed to accept stream");
                 let stream =
-                    &mut SslStream::new(stream).expect("Failed to complete handshake");
+                    &mut BlazeStream::new(stream).expect("Failed to complete handshake");
                 let mut buf = [0u8; 1024];
                 loop {
                     buf.fill(0);

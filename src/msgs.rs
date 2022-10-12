@@ -72,6 +72,84 @@ impl Codec for MessageType {
     }
 }
 
+#[derive(Debug)]
+pub enum FatalAlert {
+    UnexpectedMessage,
+    BadRecordMac,
+    DecompressionFailure,
+    IllegalParameter,
+    Unknown
+}
+
+impl Codec for FatalAlert {
+    fn encode(&self, output: &mut Vec<u8>) {
+        output.push(2);
+        output.push( match self {
+            Self::UnexpectedMessage => 0xA,
+            Self::BadRecordMac => 0x14,
+            Self::DecompressionFailure => 0x1E,
+            Self::IllegalParameter => 0x2F,
+            Self::Unknown => 0x0
+        });
+    }
+
+    fn decode(input: &mut Reader) -> Option<Self> {
+        let _level = input.take_byte()?;
+        let value = input.take_byte()?;
+        Some(match value {
+            0xA => Self::UnexpectedMessage,
+            0x14 => Self::BadRecordMac,
+            0x1E => Self::DecompressionFailure,
+            0x2F => Self::IllegalParameter,
+            _ => return None
+        })
+    }
+}
+
+#[derive(Debug)]
+pub enum Alert {
+    CloseNotify,
+    HandshakeFailure,
+    NoCertificate,
+    BadCertificate,
+    UnsupportedCertificate,
+    CertificateRevoked,
+    CertificateExpired,
+    CertificateUnknown,
+}
+
+impl Codec for Alert {
+    fn encode(&self, output: &mut Vec<u8>) {
+        output.push(1);
+        output.push(  match self {
+            Self::CloseNotify => 0x0,
+            Self::HandshakeFailure => 0x28,
+            Self::NoCertificate => 0x29,
+            Self::BadCertificate => 0x2A,
+            Self::UnsupportedCertificate => 0x2B,
+            Self::CertificateRevoked => 0x2C,
+            Self::CertificateExpired => 0x2D,
+            Self::CertificateUnknown => 0x2E,
+        });
+    }
+
+    fn decode(input: &mut Reader) -> Option<Self> {
+        let _level = input.take_byte()?;
+        let value = input.take_byte()?;
+        Some(match value {
+            0x0 => Self::CloseNotify,
+            0x28 => Self::HandshakeFailure,
+            0x29 => Self::NoCertificate,
+            0x2A => Self::BadCertificate,
+            0x2B => Self::UnsupportedCertificate,
+            0x2C => Self::CertificateRevoked,
+            0x2D => Self::CertificateExpired,
+            0x2E => Self::CertificateUnknown,
+            _ => return None,
+        })
+    }
+}
+
 /// Message where the payload is borrowed from a slice of another message
 #[derive(Debug)]
 pub struct BorrowedMessage<'a> {
@@ -136,7 +214,7 @@ pub const MAX_FRAGMENT_LEN: usize = 16384;
 /// of borrowed messages that fit the same chunks
 pub fn fragment_message<'a>(
     message: &'a Message,
-) -> impl Iterator<Item = BorrowedMessage<'a>> + 'a {
+) -> impl Iterator<Item=BorrowedMessage<'a>> + 'a {
     message
         .payload
         .chunks(MAX_FRAGMENT_LEN)
@@ -348,7 +426,7 @@ impl HandshakeJoiner {
 
             let length = rd.cursor();
             let raw = self.buf[0..length].to_vec();
-            self.payloads.push_back(HandshakeMessage { payload, raw, });
+            self.payloads.push_back(HandshakeMessage { payload, raw });
             length
         };
         self.buf = self.buf.split_off(used);

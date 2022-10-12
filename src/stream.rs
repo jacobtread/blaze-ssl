@@ -1,11 +1,9 @@
 use std::cmp;
-use crate::codec::{Certificate, SSLRandom};
+use crate::codec::{Certificate, Codec, Reader, SSLRandom};
 use crate::constants::PROTOCOL_SSL3;
 use crate::handshake::{Transcript, HandshakePayload};
 use crate::hash::{generate_key_block, FinishedSender, compute_finished_md5, compute_finished_sha, compute_mac};
-use crate::msgs::{
-    fragment_message, BorrowedMessage, HandshakeJoiner, MessageDeframer, OpaqueMessage,
-};
+use crate::msgs::{fragment_message, BorrowedMessage, HandshakeJoiner, MessageDeframer, OpaqueMessage, Alert, FatalAlert};
 use crate::msgs::{Message, MessageType};
 use crypto::rc4::Rc4;
 use crypto::symmetriccipher::SynchronousStreamCipher;
@@ -14,93 +12,74 @@ use std::io::{self, ErrorKind, Read, Write};
 use lazy_static::lazy_static;
 
 lazy_static! {
+    /// RSA private key used by the server
     pub static ref SERVER_KEY: RsaPrivateKey = {
-        let key_pem =
-"-----BEGIN PRIVATE KEY-----
-MIICdgIBADANBgkqhkiG9w0BAQEFAASCAmAwggJcAgEAAoGBAJxG0s15Tn142nLp
-mt4v/uAfPQ/pudO1aPgp28J7MPv5HM11ctZV5VQNBfg2Eh8NzXSBeIkUfltVr7HT
-ojqNOwI2KQ242QROA5V1EsSrzWKtyltIuCkRtWIhDMYRDpNIny5Xedao9CY6QJWI
-ZfJxLGANnYufvXrLAD2yFLHiLW1FAgMBAAECgYAsWRTdZn1VsgQb9BsUzn3/0B2d
-9G/dmm+NbSOGDzuZZdo8nAXYuUt5DLES/RUrZtlVJKC2FfC9rpVLW4mAIDAMQO9U
-GXD/mOLya7Mu0LarYXZh143ro8UuNuo60sJ48lm8yDnpOn0WllSPayDMN+zxU5yE
-N2hBIHut0I3hbNNiAQJBANL1gK780PO8BdTedJnms6VvZavWAGjs56cgU5yPqIdc
-L+bFezkoxdQ9wZgCXoladKNCu7JMOJvtDRCfbQLfEsECQQC9pIToF+0SD69b2mu2
-GJ8eWtvfkGD2S72s4A/wjg/90WPjYmF83eOrNIzce19eYALrFiCscB9ZNklSXnl/
-52+FAkEAhZeOnEHhmNfy4XDWajecgCFhQ0ZMECYmNMHV8QlQchfBBeT9OZ9GWDeb
-h0XI1DaCMnkqH6kBGE0vvt0WzYCygQJANGbKZst9sXjuDqZ7DtUc2qlmig7+C/B/
-184N+X13w73hKQqdP4CckUkzBxV8E7rZ85Wor51HvEH43q7GSeZsdQJAXHoHVv2w
-xH8ifZdHiYtCpsLxA3we4qpkhB5Fx4thNGrrxFRePPZ6qJFxNUwDORzl1fzLajuh
-59fMDjYTMldyyA==
------END PRIVATE KEY-----
-";
+        let key_der = include_bytes!("key.der");
         use rsa::pkcs8::DecodePrivateKey;
         use rsa::RsaPrivateKey;
 
-        RsaPrivateKey::from_pkcs8_pem(key_pem)
+        RsaPrivateKey::from_pkcs8_der(key_der)
             .expect("Failed to load redirector private key")
     };
 
+    /// Certificate used by the server
     pub static ref SERVER_CERTIFICATE: Certificate = {
-        let cert_pem =
-"-----BEGIN CERTIFICATE-----
-MIICPzCCAemgAwIBAgIQd4Bm50QSfbBIvDa3eryoGTANBgkqhkiG9w0BAQQFADAW
-MRQwEgYDVQQDEwtSb290IEFnZW5jeTAeFw0xNDA1MjYxODQyNDhaFw0zOTEyMzEy
-MzU5NTlaMIGDMQswCQYDVQQGEwJVUzETMBEGA1UECBMKQ2FsaWZvcm5pYTEeMBwG
-A1UEChMVRWxlY3Ryb25pYyBBcnRzLCBJbmMuMSAwHgYDVQQLExdPbmxpbmUgVGVj
-aG5vbG9neSBHcm91cDEdMBsGA1UEAxMUZ29zcmVkaXJlY3Rvci5lYS5jb20wgZ8w
-DQYJKoZIhvcNAQEBBQADgY0AMIGJAoGBAJxG0s15Tn142nLpmt4v/uAfPQ/pudO1
-aPgp28J7MPv5HM11ctZV5VQNBfg2Eh8NzXSBeIkUfltVr7HTojqNOwI2KQ242QRO
-A5V1EsSrzWKtyltIuCkRtWIhDMYRDpNIny5Xedao9CY6QJWIZfJxLGANnYufvXrL
-AD2yFLHiLW1FAgMBAAGjYTBfMBQGA1UdJQQNMAsGCSqGSIb3DQEBBDBHBgNVHQEE
-QDA+gBAS5AktBh0dTwCNYSHcFmRjoRgwFjEUMBIGA1UEAxMLUm9vdCBBZ2VuY3mC
-EAY3bACqAGSKEc+41KpcNfQwDQYJKoZIhvcNAQEEBQADQQBAMsu0/XrPBK2GcmNo
-l+4HM2arL9Va0jw/3GRk9TsmXL0rhODVOxN4REWdVyHHYispQyJQXm6oG6+lDq8z
-gIFf
------END CERTIFICATE-----
-";
-        use pem;
-
-        let bytes = pem::parse(cert_pem)
-            .expect("Failed to load redirector certificate")
-            .contents;
-        Certificate(bytes)
+        let cert_der = include_bytes!("cert.der");
+        Certificate(cert_der.to_vec())
     };
 }
 
-pub struct SslStream<S> {
+/// Wrapping structure for wrapping Read + Write streams with a SSLv3
+/// protocol wrapping.
+pub struct BlazeStream<S> {
+    /// Underlying stream target
     stream: S,
+
+    /// Write sequence counter (Reset on cipher change)
     write_seq: u64,
+    /// Read sequence counter (Reset on cipher change)
     read_seq: u64,
+
+    /// Message deframer for de-framing messages from the read stream
     deframer: MessageDeframer,
+
+    /// Processor for pre-processing messages that have been read
     read_processor: ReadProcessor,
+    /// Process for pre-processing messages that are being sent
     write_processor: WriteProcessor,
 
+    /// Buffer for input that is read from the application layer
     read_buffer: Vec<u8>,
+    /// Buffer for output written to the application layer
+    /// (Written to stream when connection is flushed)
     write_buffer: Vec<u8>,
+
+    /// State determining whether the stream is stopped
+    stopped: bool,
 }
 
 #[derive(Debug)]
-pub enum SslError {
+pub enum BlazeError {
     IO(io::Error),
-    InvalidMessages,
-    UnexpectedMessage,
-    Failure,
+    FatalAlert(FatalAlert),
+    Stopped,
     Unsupported,
 }
 
-impl From<io::Error> for SslError {
+
+impl From<io::Error> for BlazeError {
     fn from(err: io::Error) -> Self {
-        SslError::IO(err)
+        BlazeError::IO(err)
     }
 }
 
-pub type SslResult<T> = Result<T, SslError>;
+pub type BlazeResult<T> = Result<T, BlazeError>;
 
-impl<S> SslStream<S>
+impl<S> BlazeStream<S>
     where
         S: Read + Write,
 {
-    pub fn new(value: S) -> SslResult<Self> {
+    pub fn new(value: S) -> BlazeResult<Self> {
         let stream = Self {
             stream: value,
             write_seq: 0,
@@ -110,6 +89,7 @@ impl<S> SslStream<S>
             write_processor: WriteProcessor::None,
             write_buffer: Vec::new(),
             read_buffer: Vec::new(),
+            stopped: false,
         };
         let handshaking = HandshakingStream {
             stream,
@@ -121,19 +101,69 @@ impl<S> SslStream<S>
 
     /// Attempts to take the next message form the deframer or read a new
     /// message from the underlying stream if there is no parsable messages
-    pub fn next_message(&mut self) -> SslResult<Message> {
+    pub fn next_message(&mut self) -> BlazeResult<Message> {
         loop {
+            if self.stopped {
+                return Err(BlazeError::Stopped)
+            }
+
             if let Some(message) = self.deframer.next() {
                 let message = self.read_processor.process(message, self.read_seq)
-                    .map_err(|_| SslError::InvalidMessages)?;
+                    .map_err(|err| match err {
+                        DecryptError::InvalidMac => self.alert_fatal(FatalAlert::BadRecordMac)
+                    })?;
                 self.read_seq += 1;
+
+                if message.message_type == MessageType::Alert {
+                    let mut reader = Reader::new(&message.payload);
+                    if let Some(alert) = Alert::decode(&mut reader) {
+                        self.handle_alert(alert);
+                    } else {
+                        reader.reset();
+                        let fatal = FatalAlert::decode(&mut reader)
+                            .unwrap_or(FatalAlert::Unknown);
+                        return Err(self.handle_fatal(fatal));
+                    }
+                }
+
                 return Ok(message);
             }
             if !self.deframer.read(&mut self.stream)? {
-                return Err(SslError::InvalidMessages);
+                return Err(self.alert_fatal(FatalAlert::IllegalParameter));
             }
         }
     }
+
+    /// Triggers a shutdown by sending a CloseNotify alert
+    pub fn shutdown(&mut self) -> BlazeResult<()>{
+        self.alert(Alert::CloseNotify)
+    }
+
+
+    /// Handle the alert message provided
+    pub fn handle_alert(&mut self, alert: Alert) {
+        match alert {
+            Alert::CloseNotify => {
+                // We are closing flush and set stopped
+                let _ = self.flush();
+                self.stopped = true;
+            }
+            Alert::HandshakeFailure => {}
+            Alert::NoCertificate => {}
+            Alert::BadCertificate => {}
+            Alert::UnsupportedCertificate => {}
+            Alert::CertificateRevoked => {}
+            Alert::CertificateExpired => {}
+            Alert::CertificateUnknown => {}
+        }
+    }
+
+    /// Handle a fatal alert (Stop the connection and don't attempt more reads/writes)
+    pub fn handle_fatal(&mut self, alert: FatalAlert) -> BlazeError {
+        self.stopped = true;
+        return BlazeError::FatalAlert(alert);
+    }
+
 
     /// Fragments the provided message and encrypts the contents if
     /// encryption is available writing the output to the underlying
@@ -148,15 +178,45 @@ impl<S> SslStream<S>
         Ok(())
     }
 
+    /// Writes an alert message and calls `handle_alert` with the alert
+    pub fn alert(&mut self, alert: Alert) -> BlazeResult<()> {
+        let message = Message {
+            message_type: MessageType::Alert,
+            payload: alert.encode_vec(),
+        };
+        // Internally handle the alert being sent
+        self.handle_alert(alert);
+        self.write_message(message)?;
+        Ok(())
+    }
 
+    pub fn alert_fatal(&mut self, alert: FatalAlert) -> BlazeError {
+        let message = Message {
+            message_type: MessageType::Alert,
+            payload: alert.encode_vec(),
+        };
+        let _ = self.write_message(message);
+        // Internally handle the alert being sent
+        self.handle_fatal(alert)
+    }
+
+    /// Fills the application data buffer if the buffer is empty by reading
+    /// a message from the application layer
     pub fn fill_app_data(&mut self) -> io::Result<usize> {
+        if self.stopped {
+            return Err(io_closed())
+        }
         let buffer_len = self.read_buffer.len();
         let count = if buffer_len == 0 {
             let message = self.next_message()
-                .map_err(|_| io::Error::new(ErrorKind::Other, "Ssl Failure"))?;
+                .map_err(|_| io::Error::new(ErrorKind::ConnectionAborted, "Ssl Failure"))?;
+
             if message.message_type != MessageType::ApplicationData {
-                return Err(io::Error::new(ErrorKind::Other, "Non application data read"));
+                // Alert unexpected message
+                self.alert_fatal(FatalAlert::UnexpectedMessage);
+                return Ok(0)
             }
+
             let payload = message.payload;
             self.read_buffer.extend_from_slice(&payload);
             payload.len()
@@ -167,16 +227,27 @@ impl<S> SslStream<S>
     }
 }
 
-impl<S> Write for SslStream<S>
+/// Creates an error indicating that the stream is closed
+fn io_closed() -> io::Error {
+    io::Error::new(ErrorKind::Other, "Stream already closed")
+}
+
+impl<S> Write for BlazeStream<S>
     where
         S: Read + Write,
 {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if self.stopped {
+            return Err(io_closed())
+        }
         self.write_buffer.extend_from_slice(buf);
         Ok(buf.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
+        if self.stopped {
+            return Err(io_closed())
+        }
         let message = Message {
             message_type: MessageType::ApplicationData,
             payload: self.write_buffer.split_off(0),
@@ -186,12 +257,15 @@ impl<S> Write for SslStream<S>
     }
 }
 
-impl<S> Read for SslStream<S>
+impl<S> Read for BlazeStream<S>
     where
         S: Read + Write,
 {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let count = self.fill_app_data()?;
+        if self.stopped {
+            return Err(io_closed())
+        }
         let read = cmp::min(buf.len(), count);
         if read > 0 {
             let new_buffer = self.read_buffer.split_off(read);
@@ -206,16 +280,10 @@ impl<S> Read for SslStream<S>
 /// handshaking process. Provides additional structures for
 /// reading handshake messages from the stream
 pub struct HandshakingStream<S> {
-    stream: SslStream<S>,
+    stream: BlazeStream<S>,
     joiner: HandshakeJoiner,
     transcript: Transcript,
 }
-/// Type of pre master key
-pub type PreMasterKey = [u8; 48];
-/// Type of master key
-pub type MasterKey = [u8; 48];
-/// Type of slice from two combined randoms
-pub type CombinedRandom = [u8; 64];
 
 /// Structure for storing the random values from
 /// the client and server responses
@@ -241,7 +309,7 @@ impl<S> HandshakingStream<S>
 {
     /// Takes the next received handshake packet returning an error
     /// if one could not be formed or another message type was received
-    fn next_handshake(&mut self) -> SslResult<HandshakePayload> {
+    fn next_handshake(&mut self) -> BlazeResult<HandshakePayload> {
         loop {
             if let Some(message) = self.joiner.next() {
                 let payload = message.payload;
@@ -255,7 +323,7 @@ impl<S> HandshakingStream<S>
             } else {
                 let message = self.stream.next_message()?;
                 if message.message_type != MessageType::Handshake {
-                    return Err(SslError::UnexpectedMessage);
+                    return Err(self.stream.alert_fatal(FatalAlert::UnexpectedMessage));
                 }
                 self.joiner.consume_message(message);
             }
@@ -264,31 +332,29 @@ impl<S> HandshakingStream<S>
 
     /// Handles handshaking returning the underlying stream for use
     /// once handshaking is complete
-    pub fn handshake(mut self) -> Result<SslStream<S>, SslError> {
+    pub fn handshake(mut self) -> Result<BlazeStream<S>, BlazeError> {
         let hello_data = self.accept_hello()?;
         let state = self.accept_exchange(hello_data)?;
         self.accept_cipher_change(&state)?;
         self.accept_finished(&state)?;
-
-        println!("Handshake completed success");
-
         Ok(self.stream)
     }
 
     /// Handles the hello portion of the handshaking processes returns
     /// a struct containing the client and server randoms
-    fn accept_hello(&mut self) -> SslResult<HelloData> {
+    fn accept_hello(&mut self) -> BlazeResult<HelloData> {
         let client_random = match self.next_handshake()? {
             HandshakePayload::ClientHello(protocol, random) => {
                 if protocol != PROTOCOL_SSL3 {
-                    return Err(SslError::Unsupported);
+                    return Err(BlazeError::Unsupported);
                 }
                 random
             }
-            _ => return Err(SslError::UnexpectedMessage),
+            _ => return Err(self.stream.alert_fatal(FatalAlert::UnexpectedMessage)),
         };
 
-        let server_random = SSLRandom::new().map_err(|_| SslError::Failure)?;
+        let server_random = SSLRandom::new()
+            .map_err(|_| self.stream.alert_fatal(FatalAlert::IllegalParameter))?;
 
         // Send server hello, certificate, and server done
         self.emit_server_hello(server_random.clone())?;
@@ -302,7 +368,7 @@ impl<S> HandshakingStream<S>
     }
 
     /// Emits the server hello message
-    fn emit_server_hello(&mut self, server_random: SSLRandom) -> SslResult<()> {
+    fn emit_server_hello(&mut self, server_random: SSLRandom) -> BlazeResult<()> {
         let message = HandshakePayload::ServerHello(server_random)
             .as_message();
         self.transcript.push_msg(&message);
@@ -312,7 +378,7 @@ impl<S> HandshakingStream<S>
 
     /// Emit the server certificate message with a copy of the
     /// server certificate
-    fn emit_server_certificate(&mut self) -> SslResult<()> {
+    fn emit_server_certificate(&mut self) -> BlazeResult<()> {
         let message = HandshakePayload::Certificate(&SERVER_CERTIFICATE)
             .as_message();
         self.transcript.push_msg(&message);
@@ -321,7 +387,7 @@ impl<S> HandshakingStream<S>
     }
 
     /// Emits the server hello done handshake payload
-    fn emit_server_hello_done(&mut self) -> SslResult<()> {
+    fn emit_server_hello_done(&mut self) -> BlazeResult<()> {
         let message = HandshakePayload::ServerHelloDone
             .as_message();
         self.transcript.push_msg(&message);
@@ -331,15 +397,15 @@ impl<S> HandshakingStream<S>
 
     /// Handles accepting the client key exchange and generating the master
     /// key from the provided encrypted pre-master key
-    fn accept_exchange(&mut self, hello: HelloData) -> SslResult<CryptographicState> {
+    fn accept_exchange(&mut self, hello: HelloData) -> BlazeResult<CryptographicState> {
         let encrypted_pm_key = match self.next_handshake()? {
             HandshakePayload::ClientKeyExchange(payload) => payload,
-            _ => return Err(SslError::UnexpectedMessage),
+            _ => return Err(self.stream.alert_fatal(FatalAlert::UnexpectedMessage)),
         };
 
         let pm_key = SERVER_KEY
             .decrypt(PaddingScheme::PKCS1v15Encrypt, &encrypted_pm_key)
-            .map_err(|_| SslError::Failure)?;
+            .map_err(|_| self.stream.alert_fatal(FatalAlert::IllegalParameter))?;
 
 
         let client_random = &hello.client_random.0;
@@ -373,11 +439,11 @@ impl<S> HandshakingStream<S>
 
     /// Handles changing over ciphers when the ChangeCipherSpec message is
     /// received
-    fn accept_cipher_change(&mut self, state: &CryptographicState) -> SslResult<()> {
+    fn accept_cipher_change(&mut self, state: &CryptographicState) -> BlazeResult<()> {
         // Expect the client to change cipher spec
         match self.stream.next_message()?.message_type {
             MessageType::ChangeCipherSpec => {}
-            _ => return Err(SslError::UnexpectedMessage),
+            _ => return Err(self.stream.alert_fatal(FatalAlert::UnexpectedMessage)),
         }
         // Reset reads
         self.stream.read_seq = 0;
@@ -395,14 +461,14 @@ impl<S> HandshakingStream<S>
 
     /// Accepts the finishing message from the client switching the clients
     /// CipherSpec and writing back the finished message
-    fn accept_finished(&mut self, state: &CryptographicState) -> SslResult<()> {
+    fn accept_finished(&mut self, state: &CryptographicState) -> BlazeResult<()> {
         match self.next_handshake()? {
             HandshakePayload::Finished(md5_hash, sha_hash) => {
                 if !self.check_client_hashes(&state.master_key, md5_hash, sha_hash) {
-                    return Err(SslError::Failure);
+                    return Err(self.stream.alert_fatal(FatalAlert::IllegalParameter));
                 }
             }
-            _ => return Err(SslError::UnexpectedMessage),
+            _ => return Err(self.stream.alert_fatal(FatalAlert::UnexpectedMessage)),
         };
 
         self.emit_cipher_change_spec(state)?;
@@ -413,7 +479,7 @@ impl<S> HandshakingStream<S>
     /// Emits the ChangeCipherSpec message to the client telling it to change
     /// cipher spec and switches the stream write processor to the RC4
     /// encrypting processor
-    fn emit_cipher_change_spec(&mut self, state: &CryptographicState) -> SslResult<()> {
+    fn emit_cipher_change_spec(&mut self, state: &CryptographicState) -> BlazeResult<()> {
         let message = Message {
             message_type: MessageType::ChangeCipherSpec,
             payload: vec![1],
@@ -443,7 +509,7 @@ impl<S> HandshakingStream<S>
 
     /// Calculates the hashes for this handshake and emits the Finished handshake message
     /// indicating to the client that Handshaking is complete.
-    fn emit_finished(&mut self, state: &CryptographicState) -> SslResult<()> {
+    fn emit_finished(&mut self, state: &CryptographicState) -> BlazeResult<()> {
         let master_key = &state.master_key;
 
         let server_md5_hash = compute_finished_md5(master_key, FinishedSender::Server, &self.transcript.full);
