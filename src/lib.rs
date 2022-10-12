@@ -47,12 +47,6 @@ mod test {
         TcpStream::connect(("159.153.64.175", 42127)).expect("Unable to connect to server");
         let stream =
             &mut BlazeStream::new(stream, StreamMode::Client).expect("Failed SSL handshake");
-
-        let mut out;
-        loop {
-            out = [0u8; 20];
-            stream.write(&out).unwrap();
-            println!("{out:?}");
-        }
+        
     }
 }

@@ -85,7 +85,7 @@ impl HandshakePayload {
                 // NO-OP Session ID
                 content.push(0);
 
-                TLS_RSA_WITH_RC4_128_MD5.encode(&mut content);
+                TLS_RSA_WITH_RC4_128_SHA.encode(&mut content);
 
                 // Null Compression hard coded
                 content.push(0);
@@ -133,7 +133,9 @@ impl HandshakePayload {
                 let server_random = SSLRandom::decode(&mut contents)?;
 
                 let _session = decode_vec_u8::<u8>(&mut contents)?;
-                let _cipher_suite = contents.take_byte()?;
+                let cipher_suite = u16::decode(&mut contents)?;
+                println!("Chosen Cipher: {}", cipher_suite);
+
                 let _compression_method = contents.take_byte()?;
 
                 HandshakePayload::ServerHello(server_random)

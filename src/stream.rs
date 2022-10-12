@@ -133,12 +133,10 @@ impl<S> BlazeStream<S>
             }
 
             if let Some(message) = self.deframer.next() {
-                let message = self.read_processor.process(message, self.read_seq)
+                let message = self.read_processor.process(message)
                     .map_err(|err| match err {
                         DecryptError::InvalidMac => self.alert_fatal(FatalAlert::BadRecordMac)
                     })?;
-                self.read_seq += 1;
-
                 if message.message_type == MessageType::Alert {
                     let mut reader = Reader::new(&message.payload);
                     if let Some(alert) = Alert::decode(&mut reader) {
@@ -198,10 +196,9 @@ impl<S> BlazeStream<S>
     /// stream
     pub fn write_message(&mut self, message: Message) -> io::Result<()> {
         for msg in fragment_message(&message) {
-            let msg = self.write_processor.process(msg, self.write_seq);
+            let msg = self.write_processor.process(msg);
             let bytes = msg.encode();
             self.stream.write(&bytes)?;
-            self.write_seq += 1;
         }
         Ok(())
     }
@@ -312,7 +309,8 @@ pub enum WriteProcessor {
     /// RC4 Encryption processor which encrypts the message before converting
     RC4 {
         key: Rc4,
-        mac_secret: [u8; 16],
+        mac_secret: [u8; 20],
+        seq: u64
     },
 }
 
@@ -322,7 +320,7 @@ impl WriteProcessor {
     ///
     /// `message` The message to process for writing
     /// `seq` The current sequence number for this message
-    pub fn process(&mut self, message: BorrowedMessage, seq: u64) -> OpaqueMessage {
+    pub fn process(&mut self, message: BorrowedMessage) -> OpaqueMessage {
         match self {
             // NO-OP directly convert message into output
             WriteProcessor::None => OpaqueMessage {
@@ -330,13 +328,16 @@ impl WriteProcessor {
                 payload: message.payload.to_vec(),
             },
             // RC4 Encryption
-            WriteProcessor::RC4 { key, mac_secret } => {
+            WriteProcessor::RC4 { key, mac_secret, mut seq } => {
                 let mut payload = message.payload.to_vec();
                 let mac = compute_mac(mac_secret, message.message_type.value(), &payload, seq);
                 payload.extend_from_slice(&mac);
 
                 let mut payload_enc = vec![0u8; payload.len()];
                 key.process(&payload, &mut payload_enc);
+
+                seq += 1;
+
                 OpaqueMessage {
                     message_type: message.message_type,
                     payload: payload_enc,
@@ -354,7 +355,8 @@ pub enum ReadProcessor {
     /// RC4 Decryption processor which decrypts the message before converting
     RC4 {
         key: Rc4,
-        mac_secret: [u8; 16],
+        mac_secret: [u8; 20],
+        seq: u64,
     },
 }
 
@@ -368,7 +370,7 @@ pub enum DecryptError {
 type DecryptResult<T> = Result<T, DecryptError>;
 
 impl ReadProcessor {
-    pub fn process(&mut self, message: OpaqueMessage, seq: u64) -> DecryptResult<Message> {
+    pub fn process(&mut self, message: OpaqueMessage) -> DecryptResult<Message> {
         Ok(match self {
             // NO-OP directly convert message into output
             ReadProcessor::None => Message {
@@ -376,19 +378,23 @@ impl ReadProcessor {
                 payload: message.payload,
             },
             // RC4 Decryption
-            ReadProcessor::RC4 { key, mac_secret } => {
+            ReadProcessor::RC4 { key, mac_secret, mut seq } => {
                 let mut payload_and_mac = vec![0u8; message.payload.len()];
                 key.process(&message.payload, &mut payload_and_mac);
 
-                let mac_start = payload_and_mac.len() - 16;
+                let mac_start = payload_and_mac.len() - 20;
                 let payload = &payload_and_mac[..mac_start];
 
                 let mac = &payload_and_mac[mac_start..];
                 let expected_mac = compute_mac(mac_secret, message.message_type.value(), &payload, seq);
 
                 if !expected_mac.eq(mac) {
+                    println!("{mac:?}");
+                    println!("{expected_mac:?}");
                     return Err(DecryptError::InvalidMac);
                 }
+
+                seq += 1;
 
                 Message {
                     message_type: message.message_type,

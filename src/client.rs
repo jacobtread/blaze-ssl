@@ -59,7 +59,6 @@ where
         loop {
             if let Some(message) = self.joiner.next() {
                 let payload = message.payload;
-                println!("Appened client transcript: {payload:?}");
                 self.transcript.push_raw(&message.raw);
                 return Ok(payload);
             } else {
@@ -141,6 +140,8 @@ where
         let modulus = BigUint::from_bytes_be(rsa_pub_key.modulus.as_bytes());
         let public_exponent = BigUint::from_bytes_be(rsa_pub_key.public_exponent.as_bytes());
 
+        println!("{modulus:?}");
+
         let public_key = RsaPublicKey::new(modulus, public_exponent).map_err(|_| {
             println!("Public key failed");
             self.stream.alert_fatal(FatalAlert::IllegalParameter)
@@ -179,9 +180,9 @@ where
         self.stream.write_seq = 0;
         // Switch read processor to RC4 with new key
         let key = Rc4::new(&state.client_write_key);
-        let mut mac_secret = [0u8; 16];
+        let mut mac_secret = [0u8; 20];
         mac_secret.copy_from_slice(&state.client_write_secret);
-        self.stream.write_processor = WriteProcessor::RC4 { mac_secret, key };
+        self.stream.write_processor = WriteProcessor::RC4 { mac_secret, key, seq: 0 };
         Ok(())
     }
 
@@ -219,9 +220,9 @@ where
 
         // Switch read processor to RC4 with new key
         let key = Rc4::new(&state.server_write_key);
-        let mut mac_secret = [0u8; 16];
+        let mut mac_secret = [0u8; 20];
         mac_secret.copy_from_slice(&state.server_write_secret);
-        self.stream.read_processor = ReadProcessor::RC4 { mac_secret, key };
+        self.stream.read_processor = ReadProcessor::RC4 { mac_secret, key, seq: 0 };
         Ok(())
     }
 

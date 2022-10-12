@@ -7,8 +7,8 @@ use crypto::sha1::Sha1;
 /// state that may be required
 pub struct CryptographicState {
     pub(crate) master_key: [u8; 48],
-    pub(crate) client_write_secret: [u8; 16],
-    pub(crate) server_write_secret: [u8; 16],
+    pub(crate) client_write_secret: [u8; 20],
+    pub(crate) server_write_secret: [u8; 20],
     pub(crate) client_write_key: [u8; 16],
     pub(crate) server_write_key: [u8; 16],
 }
@@ -20,18 +20,18 @@ pub fn create_crypto_state(pm_key: &[u8], cr: &[u8; 32], sr: &[u8; 32]) -> Crypt
     generate_key_block(&mut master_key, &pm_key, cr, sr);
 
     // Generate key block 80 bytes long (20x2 for write secrets + 16x2 for write keys) only 72 bytes used
-    let mut key_block = [0u8; 64];
+    let mut key_block = [0u8; 80];
     generate_key_block(&mut key_block, &master_key, sr, cr);
 
-    let mut client_write_secret = [0u8; 16];
-    client_write_secret.copy_from_slice(&key_block[0..16]);
-    let mut server_write_secret = [0u8; 16];
-    server_write_secret.copy_from_slice(&key_block[16..32]);
+    let mut client_write_secret = [0u8; 20];
+    client_write_secret.copy_from_slice(&key_block[0..20]);
+    let mut server_write_secret = [0u8; 20];
+    server_write_secret.copy_from_slice(&key_block[20..40]);
 
     let mut client_write_key = [0u8; 16];
-    client_write_key.copy_from_slice(&key_block[32..48]);
+    client_write_key.copy_from_slice(&key_block[40..56]);
     let mut server_write_key = [0u8; 16];
-    server_write_key.copy_from_slice(&key_block[48..64]);
+    server_write_key.copy_from_slice(&key_block[56..72]);
 
     CryptographicState {
         master_key,
@@ -54,7 +54,7 @@ pub fn generate_key_block(out: &mut [u8], pm: &[u8], rand_1: &[u8; 32], rand_2: 
 
     let mut inner_value = [0u8; 20];
 
-    let salts = ["A", "BB", "CCC", "DDDD"].iter();
+    let salts = ["A", "BB", "CCC", "DDDD", "EEEEE"].iter();
 
     for (chunk, salt) in out.chunks_mut(16).zip(salts) {
         inner.input(salt.as_bytes());
@@ -70,11 +70,11 @@ pub fn generate_key_block(out: &mut [u8], pm: &[u8], rand_1: &[u8; 32], rand_2: 
     }
 }
 
-pub fn compute_mac(write_secret: &[u8], ty: u8, message: &[u8], seq: u64) -> [u8; 16] {
-    let mut digest = Md5::new();
-    let mut out = [0u8; 16];
-    let pad1 = [0x36; 48];
-    let pad2 = [0x5c; 48];
+pub fn compute_mac(write_secret: &[u8], ty: u8, message: &[u8], seq: u64) -> [u8; 20] {
+    let mut digest = Sha1::new();
+    let mut out = [0u8; 20];
+    let pad1 = [0x36; 40];
+    let pad2 = [0x5c; 40];
     // A = hash(MAC_write_secret + pad_1 + seq_num + SSLCompressed.type + SSLCompressed.length + SSLCompressed.fragment)
     digest.input(write_secret);
     digest.input(&pad1);

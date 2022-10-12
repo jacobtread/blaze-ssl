@@ -155,11 +155,12 @@ impl<S> ServerHandshake<S>
 
         // Switch read processor to RC4 with new key
         let key = Rc4::new(&state.client_write_key);
-        let mut mac_secret = [0u8; 16];
+        let mut mac_secret = [0u8; 20];
         mac_secret.copy_from_slice(&state.client_write_secret);
         self.stream.read_processor = ReadProcessor::RC4 {
             mac_secret,
             key,
+            seq: 0
         };
         Ok(())
     }
@@ -196,11 +197,12 @@ impl<S> ServerHandshake<S>
 
         // Switch read processor to RC4 with new key
         let key = Rc4::new(&state.server_write_key);
-        let mut mac_secret = [0u8; 16];
+        let mut mac_secret = [0u8; 20];
         mac_secret.copy_from_slice(&state.server_write_secret);
         self.stream.write_processor = WriteProcessor::RC4 {
             mac_secret,
             key,
+            seq: 0
         };
         Ok(())
     }
