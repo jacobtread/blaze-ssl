@@ -1,6 +1,8 @@
 use std::io::{Read, Write};
 use crypto::rc4::Rc4;
-use rsa::{PaddingScheme, PublicKey, RsaPublicKey};
+use der::{Decode, Reader};
+use rsa::{BigUint, PaddingScheme, PublicKey, RsaPublicKey};
+use rsa::pkcs1::DecodeRsaPublicKey;
 use rsa::pkcs8::DecodePublicKey;
 use rsa::rand_core::{OsRng, RngCore};
 use crate::codec::{Certificate, SSLRandom};
@@ -41,6 +43,7 @@ impl<S> ClientHandshake<S>
         };
         let hello_data = value.emit_hello()?;
         let cert = value.accept_certificate()?;
+        value.accept_hello_done()?;
         let state = value.start_key_exchange(&hello_data, &cert)?;
         value.emit_cipher_change_spec(&state)?;
         value.emit_finished(&state)?;
@@ -55,11 +58,6 @@ impl<S> ClientHandshake<S>
         loop {
             if let Some(message) = self.joiner.next() {
                 let payload = message.payload;
-
-                if matches!(&payload, HandshakePayload::Finished(_, _)) {
-                    // Finish the client transcription
-                    self.transcript.finish_client();
-                }
                 self.transcript.push_raw(&message.raw);
                 return Ok(payload);
             } else {
@@ -76,7 +74,10 @@ impl<S> ClientHandshake<S>
     /// a struct containing the client and server randoms
     fn emit_hello(&mut self) -> BlazeResult<HelloData> {
         let client_random = SSLRandom::new()
-            .map_err(|_| self.stream.alert_fatal(FatalAlert::IllegalParameter))?;
+            .map_err(|_| {
+                println!("Client random fail");
+                self.stream.alert_fatal(FatalAlert::IllegalParameter)
+            })?;
 
         // Send server hello, certificate, and server done
         let message = HandshakePayload::ClientHello(client_random.clone())
@@ -95,10 +96,24 @@ impl<S> ClientHandshake<S>
         })
     }
 
+    fn accept_hello_done(&mut self) -> BlazeResult<()> {
+       match self.next_handshake()? {
+            HandshakePayload::ServerHelloDone => { },
+            _ => {
+                println!("Server Done Not Got");
+                return Err(self.stream.alert_fatal(FatalAlert::UnexpectedMessage))
+            },
+        };
+        Ok(())
+    }
+
     fn accept_certificate(&mut self) -> BlazeResult<Certificate> {
         let certificate = match self.next_handshake()? {
             HandshakePayload::Certificate(cert) => cert,
-            _ => return Err(self.stream.alert_fatal(FatalAlert::UnexpectedMessage)),
+            _ => {
+                println!("Not go Cert");
+                return Err(self.stream.alert_fatal(FatalAlert::UnexpectedMessage))
+            },
         };
         Ok(certificate)
     }
@@ -108,10 +123,34 @@ impl<S> ClientHandshake<S>
         let mut pre_master_secret = [0u8; 48];
         pre_master_secret[0..2].copy_from_slice(&PROTOCOL_SSL3.to_be_bytes());
         rng.fill_bytes(&mut pre_master_secret[2..]);
-        let public_key = RsaPublicKey::from_public_key_der(&cert.0)
-            .map_err(|_| self.stream.alert_fatal(FatalAlert::IllegalParameter))?;
-        let pm_enc = public_key.encrypt(&mut OsRng, PaddingScheme::PKCS1v15Encrypt, &pre_master_secret)
-            .map_err(|_| self.stream.alert_fatal(FatalAlert::IllegalParameter))?;
+
+        use x509_cert::Certificate as Cert2;
+        use RsaPublicKey as Rsa2;
+
+        let x509 = Cert2::from_der(&cert.0)
+            .map_err(|_| {
+                println!("X509 cert failed");
+                self.stream.alert_fatal(FatalAlert::IllegalParameter)
+            })?;
+
+        let pub_key_info = x509.tbs_certificate.subject_public_key_info;
+        let rsa_pub_key =pkcs1::RsaPublicKey::from_der(pub_key_info.subject_public_key)
+            .unwrap();
+
+
+        let modulus = BigUint::from_bytes_be(rsa_pub_key.modulus.as_bytes());
+        let public_exponent = BigUint::from_bytes_be(rsa_pub_key.public_exponent.as_bytes());
+
+        let public_key = RsaPublicKey::new(modulus, public_exponent)
+            .map_err(|_| {
+                println!("Public key failed");
+                self.stream.alert_fatal(FatalAlert::IllegalParameter)
+            })?;
+        let pm_enc = public_key.encrypt(&mut rng, PaddingScheme::PKCS1v15Encrypt, &pre_master_secret)
+            .map_err(|_| {
+                println!("Public key encr failed");
+                self.stream.alert_fatal(FatalAlert::IllegalParameter)
+            })?;
         self.emit_key_exchange(pm_enc)?;
         let client_random = &hello.client_random.0;
         let server_random = &hello.server_random.0;
@@ -150,10 +189,11 @@ impl<S> ClientHandshake<S>
     }
 
     fn emit_finished(&mut self, state: &CryptographicState) -> BlazeResult<()> {
+        println!("Emit finish");
         let master_key = &state.master_key;
 
-        let md5_hash = compute_finished_md5(master_key, FinishedSender::Client, &self.transcript.client);
-        let sha_hash = compute_finished_sha(master_key, FinishedSender::Client, &self.transcript.client);
+        let md5_hash = compute_finished_md5(master_key, FinishedSender::Client, &self.transcript.full);
+        let sha_hash = compute_finished_sha(master_key, FinishedSender::Client, &self.transcript.full);
 
         let message = HandshakePayload::Finished(md5_hash, sha_hash)
             .as_message();
@@ -164,11 +204,14 @@ impl<S> ClientHandshake<S>
     /// Handles changing over ciphers when the ChangeCipherSpec message is
     /// received
     fn accept_cipher_change(&mut self, state: &CryptographicState) -> BlazeResult<()> {
-        // Expect the client to change cipher spec
+        // Expect the server to change cipher spec
         match self.stream.next_message()?.message_type {
-            MessageType::ChangeCipherSpec => {}
-            _ => return Err(self.stream.alert_fatal(FatalAlert::UnexpectedMessage)),
-        }
+            MessageType::ChangeCipherSpec => { },
+            t => {
+                println!("Not got ccs {t:?}");
+                return Err(self.stream.alert_fatal(FatalAlert::UnexpectedMessage))
+            },
+        };
         // Reset reads
         self.stream.read_seq = 0;
 
@@ -189,6 +232,7 @@ impl<S> ClientHandshake<S>
         match self.next_handshake()? {
             HandshakePayload::Finished(md5_hash, sha_hash) => {
                 if !self.check_server_hashes(&state.master_key, md5_hash, sha_hash) {
+                    println!("Finish fail");
                     return Err(self.stream.alert_fatal(FatalAlert::IllegalParameter));
                 }
             }

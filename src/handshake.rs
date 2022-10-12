@@ -1,7 +1,7 @@
 use crate::codec::{
     decode_vec_u16, decode_vec_u8, u24, Certificate, Codec, Reader, SSLRandom,
 };
-use crate::constants::{PROTOCOL_SSL3, TLS_RSA_WITH_RC4_128_MD5};
+use crate::constants::{PROTOCOL_SSL3, TLS_RSA_WITH_RC4_128_MD5, TLS_RSA_WITH_RC4_128_SHA};
 use crate::msgs::{Message, MessageType};
 
 #[derive(Debug)]
@@ -66,9 +66,9 @@ impl HandshakePayload {
                 content.push(0);
 
                 // Two cipher suites
-                u16::encode(&2, &mut content);
+                u16::encode(&4, &mut content);
 
-                TLS_RSA_WITH_RC4_128_MD5.encode(&mut content);
+                TLS_RSA_WITH_RC4_128_SHA.encode(&mut content);
                 TLS_RSA_WITH_RC4_128_MD5.encode(&mut content);
 
                 // Null compression

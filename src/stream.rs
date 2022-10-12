@@ -138,11 +138,14 @@ impl<S> BlazeStream<S>
                 if message.message_type == MessageType::Alert {
                     let mut reader = Reader::new(&message.payload);
                     if let Some(alert) = Alert::decode(&mut reader) {
+                        println!("Hit alert {alert:?}");
                         self.handle_alert(alert);
+                        continue;
                     } else {
                         reader.reset();
                         let fatal = FatalAlert::decode(&mut reader)
                             .unwrap_or(FatalAlert::Unknown);
+                        println!("Server gave fatal: {fatal:?}");
                         return Err(self.handle_fatal(fatal));
                     }
                 }

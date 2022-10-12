@@ -5,7 +5,7 @@ pub const PROTOCOL_SSL3: u16 = 0x0300;
 
 /// Known cipher suites (only TLS_RSA_WITH_RC4_128_MD5 is implemented)
 pub const TLS_RSA_WITH_RC4_128_MD5: u16 = 0x0004;
-//pub const TLS_RSA_WITH_RC4_128_SHA: u16 = 0x0005;
+pub const TLS_RSA_WITH_RC4_128_SHA: u16 = 0x0005;
 
 
 // = Alert levels
