@@ -176,27 +176,6 @@ impl Codec for u32 {
     }
 }
 
-/// Encodes a vector of `items` that has a byte  length variability
-/// restricted to the size of a u24
-pub fn encode_vec_u24<C: Codec>(output: &mut Vec<u8>, items: &[C]) {
-    let start_offset = output.len();
-    output.extend([0, 0, 0]); // Write initial empty size
-    for item in items {
-        item.encode(output);
-    }
-    let content_len = output.len() - start_offset - 3;
-    // Assert we haven't overflown the sizing bounds
-    debug_assert!(content_len <= 0xFFFFFF);
-    let len_bytes = u32::to_be_bytes(content_len as u32);
-
-    // Get a mutable slice to the length field
-    let out: &mut [u8; 3] = (&mut output[start_offset..start_offset + 3])
-        .try_into()
-        .unwrap();
-
-    out.copy_from_slice(&len_bytes[1..])
-}
-
 /// Decodes a vector of `items` from a variable length list proceeded by
 /// a length in bytes stored as a u8 value
 pub fn decode_vec_u8<C: Codec>(input: &mut Reader) -> Option<Vec<C>> {

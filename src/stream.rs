@@ -10,13 +10,66 @@ use crypto::rc4::Rc4;
 use crypto::symmetriccipher::SynchronousStreamCipher;
 use rsa::{PaddingScheme, RsaPrivateKey};
 use std::io::{self, Read, Write};
+use lazy_static::lazy_static;
+
+lazy_static! {
+    pub static ref SERVER_KEY: RsaPrivateKey = {
+        let key_pem =
+"-----BEGIN PRIVATE KEY-----
+MIICdgIBADANBgkqhkiG9w0BAQEFAASCAmAwggJcAgEAAoGBAJxG0s15Tn142nLp
+mt4v/uAfPQ/pudO1aPgp28J7MPv5HM11ctZV5VQNBfg2Eh8NzXSBeIkUfltVr7HT
+ojqNOwI2KQ242QROA5V1EsSrzWKtyltIuCkRtWIhDMYRDpNIny5Xedao9CY6QJWI
+ZfJxLGANnYufvXrLAD2yFLHiLW1FAgMBAAECgYAsWRTdZn1VsgQb9BsUzn3/0B2d
+9G/dmm+NbSOGDzuZZdo8nAXYuUt5DLES/RUrZtlVJKC2FfC9rpVLW4mAIDAMQO9U
+GXD/mOLya7Mu0LarYXZh143ro8UuNuo60sJ48lm8yDnpOn0WllSPayDMN+zxU5yE
+N2hBIHut0I3hbNNiAQJBANL1gK780PO8BdTedJnms6VvZavWAGjs56cgU5yPqIdc
+L+bFezkoxdQ9wZgCXoladKNCu7JMOJvtDRCfbQLfEsECQQC9pIToF+0SD69b2mu2
+GJ8eWtvfkGD2S72s4A/wjg/90WPjYmF83eOrNIzce19eYALrFiCscB9ZNklSXnl/
+52+FAkEAhZeOnEHhmNfy4XDWajecgCFhQ0ZMECYmNMHV8QlQchfBBeT9OZ9GWDeb
+h0XI1DaCMnkqH6kBGE0vvt0WzYCygQJANGbKZst9sXjuDqZ7DtUc2qlmig7+C/B/
+184N+X13w73hKQqdP4CckUkzBxV8E7rZ85Wor51HvEH43q7GSeZsdQJAXHoHVv2w
+xH8ifZdHiYtCpsLxA3we4qpkhB5Fx4thNGrrxFRePPZ6qJFxNUwDORzl1fzLajuh
+59fMDjYTMldyyA==
+-----END PRIVATE KEY-----
+";
+        use rsa::pkcs8::DecodePrivateKey;
+        use rsa::RsaPrivateKey;
+
+        RsaPrivateKey::from_pkcs8_pem(key_pem)
+            .expect("Failed to load redirector private key")
+    };
+
+    pub static ref SERVER_CERTIFICATE: Certificate = {
+        let cert_pem =
+"-----BEGIN CERTIFICATE-----
+MIICPzCCAemgAwIBAgIQd4Bm50QSfbBIvDa3eryoGTANBgkqhkiG9w0BAQQFADAW
+MRQwEgYDVQQDEwtSb290IEFnZW5jeTAeFw0xNDA1MjYxODQyNDhaFw0zOTEyMzEy
+MzU5NTlaMIGDMQswCQYDVQQGEwJVUzETMBEGA1UECBMKQ2FsaWZvcm5pYTEeMBwG
+A1UEChMVRWxlY3Ryb25pYyBBcnRzLCBJbmMuMSAwHgYDVQQLExdPbmxpbmUgVGVj
+aG5vbG9neSBHcm91cDEdMBsGA1UEAxMUZ29zcmVkaXJlY3Rvci5lYS5jb20wgZ8w
+DQYJKoZIhvcNAQEBBQADgY0AMIGJAoGBAJxG0s15Tn142nLpmt4v/uAfPQ/pudO1
+aPgp28J7MPv5HM11ctZV5VQNBfg2Eh8NzXSBeIkUfltVr7HTojqNOwI2KQ242QRO
+A5V1EsSrzWKtyltIuCkRtWIhDMYRDpNIny5Xedao9CY6QJWIZfJxLGANnYufvXrL
+AD2yFLHiLW1FAgMBAAGjYTBfMBQGA1UdJQQNMAsGCSqGSIb3DQEBBDBHBgNVHQEE
+QDA+gBAS5AktBh0dTwCNYSHcFmRjoRgwFjEUMBIGA1UEAxMLUm9vdCBBZ2VuY3mC
+EAY3bACqAGSKEc+41KpcNfQwDQYJKoZIhvcNAQEEBQADQQBAMsu0/XrPBK2GcmNo
+l+4HM2arL9Va0jw/3GRk9TsmXL0rhODVOxN4REWdVyHHYispQyJQXm6oG6+lDq8z
+gIFf
+-----END CERTIFICATE-----
+";
+        use pem;
+
+        let bytes = pem::parse(cert_pem)
+            .expect("Failed to load redirector certificate")
+            .contents;
+        Certificate(bytes)
+    };
+}
 
 pub struct SslStream<S> {
     stream: S,
     write_seq: u64,
     read_seq: u64,
-    certificate: Certificate,
-    private_key: RsaPrivateKey,
     deframer: MessageDeframer,
     read_processor: ReadProcessor,
     write_processor: WriteProcessor,
@@ -53,13 +106,11 @@ impl<S> SslStream<S>
     where
         S: Read + Write,
 {
-    pub fn new(value: S, cert: Certificate, private: RsaPrivateKey) -> SslResult<Self> {
+    pub fn new(value: S) -> SslResult<Self> {
         let stream = Self {
             stream: value,
             write_seq: 0,
             read_seq: 0,
-            certificate: cert,
-            private_key: private,
             deframer: MessageDeframer::new(),
             read_processor: ReadProcessor::None,
             write_processor: WriteProcessor::None
@@ -79,11 +130,7 @@ impl<S> SslStream<S>
             if let Some(message) = self.deframer.next() {
                 let message = self.read_processor.process(message, self.read_seq)
                     .map_err(|_| SslError::InvalidMessages)?;
-                if message.message_type == MessageType::ChangeCipherSpec {
-                    self.read_seq = 0;
-                } else {
-                    self.read_seq += 1;
-                }
+                self.read_seq += 1;
                 return Ok(message);
             }
             if !self.deframer.read(&mut self.stream)? {
@@ -100,11 +147,7 @@ impl<S> SslStream<S>
             let msg = self.write_processor.process(msg, self.write_seq);
             let bytes = msg.encode();
             self.stream.write(&bytes)?;
-            if message.message_type == MessageType::ChangeCipherSpec {
-                self.write_seq = 0;
-            } else {
-                self.write_seq += 1;
-            }
+            self.write_seq += 1;
         }
         Ok(())
     }
@@ -255,7 +298,7 @@ impl<S> HandshakingStream<S>
     /// Emit the server certificate message with a copy of the
     /// server certificate
     fn emit_server_certificate(&mut self) -> SslResult<()> {
-        let message = HandshakePayload::Certificate(self.stream.certificate.clone())
+        let message = HandshakePayload::Certificate(&SERVER_CERTIFICATE)
             .as_message();
         self.transcript.push_msg(&message);
         self.stream.write_message(message)?;
@@ -279,11 +322,10 @@ impl<S> HandshakingStream<S>
             _ => return Err(SslError::UnexpectedMessage),
         };
 
-        let pm_key = self
-            .stream
-            .private_key
+        let pm_key = SERVER_KEY
             .decrypt(PaddingScheme::PKCS1v15Encrypt, &encrypted_pm_key)
             .map_err(|_| SslError::Failure)?;
+
 
         let client_random = &hello.client_random.0;
         let server_random = &hello.server_random.0;
@@ -322,6 +364,8 @@ impl<S> HandshakingStream<S>
             MessageType::ChangeCipherSpec => {}
             _ => return Err(SslError::UnexpectedMessage),
         }
+        // Reset reads
+        self.stream.read_seq = 0;
 
         // Switch read processor to RC4 with new key
         let key = Rc4::new(&state.client_write_key);
@@ -355,11 +399,13 @@ impl<S> HandshakingStream<S>
     /// cipher spec and switches the stream write processor to the RC4
     /// encrypting processor
     fn emit_cipher_change_spec(&mut self, state: &CryptographicState) -> SslResult<()> {
-        let cipher_spec_msg = Message {
+        let message = Message {
             message_type: MessageType::ChangeCipherSpec,
             payload: vec![1],
         };
-        self.stream.write_message(cipher_spec_msg)?;
+        self.stream.write_message(message)?;
+        // Reset the writes
+        self.stream.write_seq = 0;
 
         // Switch read processor to RC4 with new key
         let key = Rc4::new(&state.server_write_key);
@@ -380,6 +426,8 @@ impl<S> HandshakingStream<S>
         exp_md5_hash == md5_hash && exp_sha_hash == sha_hash
     }
 
+    /// Calculates the hashes for this handshake and emits the Finished handshake message
+    /// indicating to the client that Handshaking is complete.
     fn emit_finished(&mut self, state: &CryptographicState) -> SslResult<()> {
         let master_key = &state.master_key;
 

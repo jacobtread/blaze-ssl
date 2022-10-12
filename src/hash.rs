@@ -62,10 +62,11 @@ pub enum FinishedSender {
 
 impl FinishedSender {
     pub fn value(&self) -> [u8; 4] {
-        match self {
-            FinishedSender::Client => 0x434C4E54u32.to_be_bytes(),
-            FinishedSender::Server => 0x53525652u32.to_be_bytes(),
-        }
+        let value: u32 = match self {
+            FinishedSender::Client => 0x434C4E54,
+            FinishedSender::Server => 0x53525652,
+        };
+        value.to_be_bytes()
     }
 }
 

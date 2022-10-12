@@ -1,5 +1,5 @@
 use crate::codec::{
-    decode_vec_u16, decode_vec_u8, encode_vec_u24, u24, Certificate, Codec, Reader, SSLRandom,
+    decode_vec_u16, decode_vec_u8, u24, Certificate, Codec, Reader, SSLRandom,
 };
 use crate::constants::{PROTOCOL_SSL3, TLS_RSA_WITH_RC4_128_MD5};
 use crate::msgs::{Message, MessageType};
@@ -16,7 +16,7 @@ pub struct HandshakeMessage {
 pub enum HandshakePayload {
     ClientHello(u16, SSLRandom),
     ServerHello(SSLRandom),
-    Certificate(Certificate),
+    Certificate(&'static Certificate),
     ServerHelloDone,
     ClientKeyExchange(Vec<u8>),
     Finished([u8; 16], [u8; 20]),
@@ -72,7 +72,13 @@ impl HandshakePayload {
                 content.push(0);
             }
             HandshakePayload::Certificate(certificate) => {
-                encode_vec_u24(&mut content, &mut vec![certificate.clone()]);
+                let size_of = certificate.0.len() as u32;
+                // Size of list
+                u24(size_of + 3).encode(&mut content);
+                // Size of cert
+                u24(size_of).encode(&mut content);
+                // Append certificate contents
+                content.extend_from_slice(&certificate.0);
             }
             HandshakePayload::Finished(md5_hash, sha_hash) => {
                 content.extend_from_slice(md5_hash);
