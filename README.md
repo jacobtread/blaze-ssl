@@ -1,5 +1,10 @@
 # ⚙️Blaze SSL
 
+![License](https://img.shields.io/github/license/jacobtread/blaze-ssl?style=for-the-badge)
+![Cargo Version](https://img.shields.io/crates/v/blaze-ssl?style=for-the-badge)
+![Cargo Downloads](https://img.shields.io/crates/d/blaze-ssl?style=for-the-badge)
+
+
 > 📌**IMPORTANT**📌 If you're here looking for a security focused SSL library this is not it check out
 > [rustls (https://github.com/rustls/rustls)](https://github.com/rustls/rustls) This 
 > library exists to fill a legacy need for EA games that depend upon the 
