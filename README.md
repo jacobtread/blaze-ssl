@@ -8,7 +8,7 @@
 ## ❔ What
 
 This is a bare minimum implementation of the SSLv3 protocol it implements only the specific server logic
-required by the gosredirector.ea.com server. This implementation forces the TLS_RSA_WITH_RC4_128_SHA cipher
+required by the gosredirector.ea.com server. This implementation forces the TLS_RSA_WITH_RC4_128_MD5 cipher
 suite and that is the only one implemented.
 
 ## ❔ Why 

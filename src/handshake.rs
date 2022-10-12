@@ -1,7 +1,7 @@
 use crate::codec::{
     decode_vec_u16, decode_vec_u8, encode_vec_u24, u24, Certificate, Codec, Reader, SSLRandom,
 };
-use crate::constants::{PROTOCOL_SSL3, TLS_RSA_WITH_RC4_128_SHA};
+use crate::constants::{PROTOCOL_SSL3, TLS_RSA_WITH_RC4_128_MD5};
 use crate::msgs::{Message, MessageType};
 
 /// Enum representing different types of possible handshake
@@ -60,7 +60,7 @@ impl HandshakePayload {
                 // NO-OP Session ID
                 content.push(0);
 
-                TLS_RSA_WITH_RC4_128_SHA.encode(&mut content);
+                TLS_RSA_WITH_RC4_128_MD5.encode(&mut content);
 
                 // Null Compression hard coded
                 content.push(0);

@@ -15,6 +15,6 @@ maintenance = { status = "experimental" }
 
 [dependencies]
 pem = "1.1.0"
-ring = "0.16.20"
+getrandom = "0.2"
 rsa = "0.7.0"
 rust-crypto = "^0.2"

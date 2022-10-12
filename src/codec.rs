@@ -1,4 +1,3 @@
-use ring::rand::{SecureRandom, SystemRandom};
 use std::fmt::Debug;
 
 /// Structure that allows reading through a slice of bytes
@@ -255,9 +254,9 @@ pub struct GetRandomFailed;
 impl SSLRandom {
     pub fn new() -> Result<Self, GetRandomFailed> {
         let mut data = [0u8; 32];
-        SystemRandom::new()
-            .fill(&mut data)
-            .map_err(|_| GetRandomFailed)?;
+
+        getrandom::getrandom(&mut data).map_err(|_| GetRandomFailed)?;
+
         Ok(Self(data))
     }
 }
