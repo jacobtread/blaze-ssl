@@ -1,4 +1,5 @@
 use crate::codec::{Certificate, SSLRandom};
+use crate::constants::{MD5_HASH_SIZE, PROTOCOL_SSL3, RC4_KEY_MATERIAL, REQUIRED_KEY_MATERIAL};
 use crate::handshake::HandshakePayload;
 use crate::hash::generate_key_block;
 use crate::msgs::{
@@ -212,11 +213,17 @@ where
     /// a struct containing the client and server randoms
     fn accept_hello(&mut self) -> SslResult<HelloData> {
         println!("State = Accept Hello");
-        let (protocol, client_random) = match self.next_handshake()? {
-            HandshakePayload::ClientHello(a, b) => (a, b),
+        let client_random = match self.next_handshake()? {
+            HandshakePayload::ClientHello(protocol, random) => {
+                if protocol != PROTOCOL_SSL3 {
+                    return Err(SslError::Unsupported);
+                }
+                random
+            }
             _ => return Err(SslError::UnexpectedMessage),
         };
-        println!("Got Client Hello (Version: {protocol:?}, Random: {client_random:?})");
+
+        println!("Got Client Hello Random: {client_random:?})");
 
         let server_random = SSLRandom::new().map_err(|_| SslError::Failure)?;
         let certificate = self.stream.certificate.clone();
@@ -262,20 +269,15 @@ where
         let mut master_key = [0u8; 48];
         generate_key_block(&mut master_key, &pm_key, client_random, server_random);
 
-        // The length of hash values for mac secrets
-        const HASH_LENGTH: usize = 16;
-        // The length of key material
-        const KEY_MATERIAL: usize = 16;
-
         // Generate key block 80 bytes long (20x2 for write secrets + 16x2 for write keys) only 72 bytes used
-        let mut key_block = [0u8; 64];
+        let mut key_block = [0u8; REQUIRED_KEY_MATERIAL];
         generate_key_block(&mut key_block, &master_key, server_random, client_random);
 
-        let (client_write_mac_sec, key_block) = key_block.split_at(HASH_LENGTH);
-        let (server_write_mac_sec, key_block) = key_block.split_at(HASH_LENGTH);
+        let (client_write_mac_sec, key_block) = key_block.split_at(MD5_HASH_SIZE);
+        let (server_write_mac_sec, key_block) = key_block.split_at(MD5_HASH_SIZE);
 
-        let (client_write_key, key_block) = key_block.split_at(KEY_MATERIAL);
-        let (server_write_key, _) = key_block.split_at(KEY_MATERIAL);
+        let (client_write_key, key_block) = key_block.split_at(RC4_KEY_MATERIAL);
+        let (server_write_key, _) = key_block.split_at(RC4_KEY_MATERIAL);
 
         let client_write_key = Rc4::new(&client_write_key);
         let server_write_key = Rc4::new(&server_write_key);

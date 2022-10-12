@@ -254,9 +254,7 @@ pub struct GetRandomFailed;
 impl SSLRandom {
     pub fn new() -> Result<Self, GetRandomFailed> {
         let mut data = [0u8; 32];
-
         getrandom::getrandom(&mut data).map_err(|_| GetRandomFailed)?;
-
         Ok(Self(data))
     }
 }
@@ -269,7 +267,7 @@ impl Codec for SSLRandom {
     fn decode(input: &mut Reader) -> Option<Self> {
         let bytes = input.take(32)?;
         let mut opaque = [0; 32];
-        opaque.clone_from_slice(bytes);
+        opaque.copy_from_slice(bytes);
         Some(Self(opaque))
     }
 }
