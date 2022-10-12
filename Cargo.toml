@@ -15,10 +15,6 @@ maintenance = { status = "experimental" }
 
 [dependencies]
 pem = "1.1.0"
-lazy_static = "1.4.0"
-rc4 = "0.1.0"
-derive_more = "0.99.17"
 ring = "0.16.20"
 rsa = "0.7.0"
-md5 = "0.7.0"
-sha1_smol = "1.0.0"
+rust-crypto = "^0.2"

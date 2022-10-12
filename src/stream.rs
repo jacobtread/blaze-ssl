@@ -1,15 +1,17 @@
 use crate::codec::{Certificate, SSLRandom};
 use crate::handshake::HandshakePayload;
-use crate::hash::generate_key_block;
+use crate::hash::{generate_key_block, generate_key_block_2};
 use crate::msgs::{
     fragment_message, BorrowedMessage, HandshakeJoiner, MessageDeframer, OpaqueMessage,
 };
 use crate::msgs::{Message, MessageType};
-use rc4::consts::U16;
-use rc4::{Key, KeyInit, Rc4, StreamCipher};
+use crypto::digest::Digest;
+use crypto::rc4::Rc4;
+use crypto::sha1::Sha1;
+use crypto::symmetriccipher::{Encryptor, SynchronousStreamCipher};
 use rsa::{PaddingScheme, RsaPrivateKey};
-use sha1_smol::Sha1;
 use std::io::{self, Read, Write};
+use std::ptr::hash;
 
 pub struct SslStream<S> {
     stream: S,
@@ -252,17 +254,19 @@ where
                 SslError::Failure
             })?;
 
+        println!("PM KEY LEN: {}", pm_key.len());
+
         println!("Decrypted pre-master key: {pm_key:?}");
 
         let client_random = &hello.client_random.0;
         let server_random = &hello.server_random.0;
 
         let mut master_key = [0u8; 48];
-        generate_key_block(&mut master_key, &pm_key, client_random, server_random);
+        generate_key_block_2(&mut master_key, &pm_key, client_random, server_random);
 
         // Generate key block 80 bytes long (20x2 for write secrets + 16x2 for write keys) only 72 bytes used
         let mut key_block = [0u8; 80];
-        generate_key_block(&mut key_block, &master_key, server_random, client_random);
+        generate_key_block_2(&mut key_block, &master_key, server_random, client_random);
 
         let mut client_write_secret = [0u8; 20];
         client_write_secret.copy_from_slice(&key_block[0..20]);
@@ -295,10 +299,8 @@ where
             _ => return Err(SslError::UnexpectedMessage),
         }
 
-        let client_write_key = Key::from(exchange_data.client_write_key);
-        let client_write_key = Rc4::new(&client_write_key);
-        let server_write_key = Key::from(exchange_data.server_write_key);
-        let server_write_key = Rc4::new(&server_write_key);
+        let client_write_key = Rc4::new(&exchange_data.client_write_key);
+        let server_write_key = Rc4::new(&exchange_data.server_write_key);
 
         println!("Created RC4 keys from master key. Switching to CipherSpec");
 
@@ -340,28 +342,35 @@ pub enum MessageProcessor {
     RC4 {
         server_mac_secret: [u8; 20],
         client_mac_secret: [u8; 20],
-        read_key: Rc4<U16>,
-        write_key: Rc4<U16>,
+        read_key: Rc4,
+        write_key: Rc4,
     },
 }
 
 impl MessageProcessor {
     /// Appends the mac value to this message
-    pub fn compute_mac(write_secret: &[u8], message: &[u8], seq: u64) -> [u8; 20] {
-        let inner = {
-            let mut sha = Sha1::new();
-            sha.update(write_secret);
-            sha.update(&[0x36; 40]);
-            sha.update(&seq.to_be_bytes());
-            sha.update(&message.len().to_be_bytes());
-            sha.update(message);
-            sha.digest().bytes()
-        };
-        let mut outer = Sha1::new();
-        outer.update(write_secret);
-        outer.update(&[0x5c; 40]);
-        outer.update(&inner);
-        outer.digest().bytes()
+    pub fn compute_mac(write_secret: &[u8], ty: u8, message: &[u8], seq: u64) -> [u8; 20] {
+        let mut hasher = Sha1::new();
+        let mut inner = [0u8; 20];
+        let mut outer = [0u8; 20];
+
+        {
+            hasher.input(write_secret);
+            hasher.input(&[0x36; 40]);
+            hasher.input(&seq.to_be_bytes());
+            hasher.input(&[ty]);
+            hasher.input(&message.len().to_be_bytes());
+            hasher.input(message);
+            hasher.result(&mut inner);
+            hasher.reset();
+        }
+
+        hasher.input(write_secret);
+        hasher.input(&[0x5c; 40]);
+        hasher.input(&inner);
+        hasher.result(&mut outer);
+
+        outer
     }
 
     pub fn encrypt(&mut self, message: BorrowedMessage, seq: u64) -> OpaqueMessage {
@@ -376,9 +385,14 @@ impl MessageProcessor {
                 ..
             } => {
                 let mut payload = message.payload.to_vec();
-                let mac = Self::compute_mac(server_mac_secret, &payload, seq);
+                let mac = Self::compute_mac(
+                    server_mac_secret,
+                    message.content_type.value(),
+                    &payload,
+                    seq,
+                );
                 payload.extend_from_slice(&mac);
-                write_key.apply_keystream(&mut payload);
+                write_key.process(&message.payload, &mut payload);
                 OpaqueMessage {
                     ty: message.content_type,
                     payload,
@@ -398,15 +412,16 @@ impl MessageProcessor {
                 client_mac_secret,
                 ..
             } => {
-                let mut payload = message.payload.to_vec();
+                let mut payload = message.payload.clone();
                 println!("{payload:?}");
-                read_key.apply_keystream(&mut payload);
+                read_key.process(&message.payload, &mut payload);
                 let mac = &payload[payload.len() - 20..];
                 let payload = payload[..payload.len() - 20].to_vec();
                 println!("{mac:?}");
                 println!("{payload:?}");
 
-                let expected_mac = Self::compute_mac(client_mac_secret, &payload, seq);
+                let expected_mac =
+                    Self::compute_mac(client_mac_secret, message.ty.value(), &payload, seq);
 
                 println!("Decrypted message: \nMac: {mac:?}\nExpected Mac: {expected_mac:?}");
 

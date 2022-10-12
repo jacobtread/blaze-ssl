@@ -40,15 +40,21 @@ pub enum MessageType {
     Unknown(u8),
 }
 
+impl MessageType {
+    pub fn value(&self) -> u8 {
+        match self {
+            MessageType::ChangeCipherSpec => 20,
+            MessageType::Alert => 21,
+            MessageType::Handshake => 22,
+            MessageType::ApplicationData => 23,
+            MessageType::Unknown(value) => *value,
+        }
+    }
+}
+
 impl Codec for MessageType {
     fn encode(&self, output: &mut Vec<u8>) {
-        output.push(match self {
-            Self::ChangeCipherSpec => 0x14,
-            Self::Alert => 0x15,
-            Self::Handshake => 0x16,
-            Self::ApplicationData => 0x17,
-            Self::Unknown(value) => *value,
-        })
+        output.push(self.value())
     }
 
     fn decode(input: &mut Reader) -> Option<Self> {
