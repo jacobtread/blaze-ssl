@@ -1,5 +1,6 @@
 extern crate core;
 
+use std::io::Read;
 use codec::Certificate;
 use rsa::pkcs8::DecodePrivateKey;
 use rsa::RsaPrivateKey;
@@ -70,9 +71,15 @@ fn main() {
         let cert = cert.clone();
         thread::spawn(move || {
             let stream = stream.expect("Failed to accept stream");
-            let _stream =
+            let stream =
                 &mut SslStream::new(stream, cert, key).expect("Failed to complete handshake");
+            let mut buf = [0u8; 1024];
             loop {
+                buf.fill(0);
+                let read_count = stream.read(&mut buf).unwrap();
+                if read_count > 0 {
+                    println!("{:?}", &buf[..read_count]);
+                }
                 sleep(Duration::from_secs(5))
             }
         });

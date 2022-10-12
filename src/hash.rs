@@ -31,6 +31,30 @@ pub fn generate_key_block(out: &mut [u8], pm: &[u8], rand_1: &[u8; 32], rand_2: 
     }
 }
 
+pub fn compute_mac(write_secret: &[u8], ty: u8, message: &[u8], seq: u64) -> [u8; 16] {
+    let mut digest = Md5::new();
+    let mut out = [0u8; 16];
+    let pad1 = [0x36; 48];
+    let pad2 = [0x5c; 48];
+    // A = hash(MAC_write_secret + pad_1 + seq_num + SSLCompressed.type + SSLCompressed.length + SSLCompressed.fragment)
+    digest.input(write_secret);
+    digest.input(&pad1);
+    digest.input(&seq.to_be_bytes());
+    digest.input(&[ty]);
+    let length = u16::to_be_bytes(message.len() as u16);
+    digest.input(&length);
+    digest.input(message);
+    digest.result(&mut out);
+    digest.reset();
+
+    // hash(MAC_write_secret + pad_2 + A);
+    digest.input(write_secret);
+    digest.input(&pad2);
+    digest.input(&out);
+    digest.result(&mut out);
+    out
+}
+
 pub enum FinishedSender {
     Client,
     Server,

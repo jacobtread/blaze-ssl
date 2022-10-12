@@ -49,7 +49,7 @@ impl HandshakePayload {
     pub fn as_message(&self) -> Message {
         let payload = self.encode();
         Message {
-            ty: MessageType::Handshake,
+            message_type: MessageType::Handshake,
             payload,
         }
     }

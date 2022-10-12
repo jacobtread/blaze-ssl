@@ -11,14 +11,14 @@ pub const SSL_V3: u16 = 0x0300;
 /// bytes
 #[derive(Debug)]
 pub struct OpaqueMessage {
-    pub ty: MessageType,
+    pub message_type: MessageType,
     pub payload: Vec<u8>,
 }
 
 impl Into<OpaqueMessage> for Message {
     fn into(self) -> OpaqueMessage {
         OpaqueMessage {
-            ty: self.ty,
+            message_type: self.message_type,
             payload: self.payload,
         }
     }
@@ -27,7 +27,7 @@ impl Into<OpaqueMessage> for Message {
 /// Represents a SSL message that is in plain text
 #[derive(Debug)]
 pub struct Message {
-    pub ty: MessageType,
+    pub message_type: MessageType,
     pub payload: Vec<u8>,
 }
 
@@ -75,7 +75,7 @@ impl Codec for MessageType {
 /// Message where the payload is borrowed from a slice of another message
 #[derive(Debug)]
 pub struct BorrowedMessage<'a> {
-    pub content_type: MessageType,
+    pub message_type: MessageType,
     pub payload: &'a [u8],
 }
 
@@ -90,7 +90,7 @@ impl OpaqueMessage {
     pub(crate) fn encode(&self) -> Vec<u8> {
         let length = self.payload.len();
         let mut output = Vec::with_capacity(5 + length);
-        self.ty.encode(&mut output);
+        self.message_type.encode(&mut output);
         SSL_V3.encode(&mut output);
         (length as u16).encode(&mut output);
         output.extend_from_slice(&self.payload);
@@ -113,7 +113,7 @@ impl OpaqueMessage {
         let payload = payload.remaining().to_vec();
 
         Ok(Self {
-            ty: content_type,
+            message_type: content_type,
             payload,
         })
     }
@@ -141,7 +141,7 @@ pub fn fragment_message<'a>(
         .payload
         .chunks(MAX_FRAGMENT_LEN)
         .map(move |c| BorrowedMessage {
-            content_type: message.ty.clone(),
+            message_type: message.message_type.clone(),
             payload: c,
         })
 }

@@ -1,13 +1,11 @@
 use crate::codec::{Certificate, SSLRandom};
 use crate::constants::PROTOCOL_SSL3;
 use crate::handshake::{HandshakeHashBuffer, HandshakePayload};
-use crate::hash::{generate_key_block, FinishedSender, compute_finished_md5, compute_finished_sha};
+use crate::hash::{generate_key_block, FinishedSender, compute_finished_md5, compute_finished_sha, compute_mac};
 use crate::msgs::{
     fragment_message, BorrowedMessage, HandshakeJoiner, MessageDeframer, OpaqueMessage,
 };
 use crate::msgs::{Message, MessageType};
-use crypto::digest::Digest;
-use crypto::md5::Md5;
 use crypto::rc4::Rc4;
 use crypto::symmetriccipher::SynchronousStreamCipher;
 use rsa::{PaddingScheme, RsaPrivateKey};
@@ -20,7 +18,8 @@ pub struct SslStream<S> {
     certificate: Certificate,
     private_key: RsaPrivateKey,
     deframer: MessageDeframer,
-    processor: MessageProcessor,
+    read_processor: ReadProcessor,
+    write_processor: WriteProcessor,
 }
 
 impl<S> SslStream<S> {
@@ -62,7 +61,8 @@ impl<S> SslStream<S>
             certificate: cert,
             private_key: private,
             deframer: MessageDeframer::new(),
-            processor: MessageProcessor::None,
+            read_processor: ReadProcessor::None,
+            write_processor: WriteProcessor::None
         };
         let handshaking = HandshakingStream {
             stream,
@@ -77,8 +77,9 @@ impl<S> SslStream<S>
     pub fn next_message(&mut self) -> SslResult<Message> {
         loop {
             if let Some(message) = self.deframer.next() {
-                let message = self.processor.decrypt(message, self.read_seq);
-                if message.ty == MessageType::ChangeCipherSpec {
+                let message = self.read_processor.process(message, self.read_seq)
+                    .map_err(|_| SslError::InvalidMessages)?;
+                if message.message_type == MessageType::ChangeCipherSpec {
                     self.read_seq = 0;
                 } else {
                     self.read_seq += 1;
@@ -96,10 +97,10 @@ impl<S> SslStream<S>
     /// stream
     pub fn write_message(&mut self, message: Message) -> io::Result<()> {
         for msg in fragment_message(&message) {
-            let msg = self.processor.encrypt(msg, self.write_seq);
+            let msg = self.write_processor.process(msg, self.write_seq);
             let bytes = msg.encode();
             self.stream.write(&bytes)?;
-            if message.ty == MessageType::ChangeCipherSpec {
+            if message.message_type == MessageType::ChangeCipherSpec {
                 self.write_seq = 0;
             } else {
                 self.write_seq += 1;
@@ -167,19 +168,14 @@ pub struct HelloData {
     server_random: SSLRandom,
 }
 
-/// Structure for storing the master key and combined
-/// randoms values from the ClientKeyExchange
-pub struct ExchangeData {
+/// Structure for storing cryptographic keys and
+/// state that may be required
+pub struct CryptographicState {
     master_key: [u8; 48],
     client_write_secret: [u8; 16],
     server_write_secret: [u8; 16],
-    client_write_key: Rc4,
-    server_write_key: Rc4,
-}
-
-/// Structure for data used in the finished message
-pub struct FinishedData {
-    master_key: [u8; 48],
+    client_write_key: [u8; 16],
+    server_write_key: [u8; 16],
 }
 
 impl<S> HandshakingStream<S>
@@ -200,7 +196,7 @@ impl<S> HandshakingStream<S>
                 return Ok(payload);
             } else {
                 let message = self.stream.next_message()?;
-                if message.ty != MessageType::Handshake {
+                if message.message_type != MessageType::Handshake {
                     return Err(SslError::UnexpectedMessage);
                 }
                 self.joiner.consume_message(message);
@@ -212,9 +208,9 @@ impl<S> HandshakingStream<S>
     /// once handshaking is complete
     pub fn handshake(mut self) -> Result<SslStream<S>, SslError> {
         let hello_data = self.accept_hello()?;
-        let exchange_data = self.accept_exchange(hello_data)?;
-        let finished_data = self.accept_cipher_change(exchange_data)?;
-        self.accept_finished(finished_data)?;
+        let state = self.accept_exchange(hello_data)?;
+        self.accept_cipher_change(&state)?;
+        self.accept_finished(&state)?;
 
         println!("Handshake completed success");
 
@@ -277,7 +273,7 @@ impl<S> HandshakingStream<S>
 
     /// Handles accepting the client key exchange and generating the master
     /// key from the provided encrypted pre-master key
-    fn accept_exchange(&mut self, hello: HelloData) -> SslResult<ExchangeData> {
+    fn accept_exchange(&mut self, hello: HelloData) -> SslResult<CryptographicState> {
         let encrypted_pm_key = match self.next_handshake()? {
             HandshakePayload::ClientKeyExchange(payload) => payload,
             _ => return Err(SslError::UnexpectedMessage),
@@ -309,10 +305,7 @@ impl<S> HandshakingStream<S>
         let mut server_write_key = [0u8; 16];
         server_write_key.copy_from_slice(&key_block[48..64]);
 
-        let client_write_key = Rc4::new(&client_write_key);
-        let server_write_key = Rc4::new(&server_write_key);
-
-        Ok(ExchangeData {
+        Ok(CryptographicState {
             master_key,
             client_write_secret,
             server_write_secret,
@@ -323,51 +316,75 @@ impl<S> HandshakingStream<S>
 
     /// Handles changing over ciphers when the ChangeCipherSpec message is
     /// received
-    fn accept_cipher_change(&mut self, exchange_data: ExchangeData) -> SslResult<FinishedData> {
+    fn accept_cipher_change(&mut self, state: &CryptographicState) -> SslResult<()> {
         // Expect the client to change cipher spec
-        match self.stream.next_message()?.ty {
+        match self.stream.next_message()?.message_type {
             MessageType::ChangeCipherSpec => {}
             _ => return Err(SslError::UnexpectedMessage),
         }
 
-        self.stream.processor = MessageProcessor::RC4 {
-            client_mac_secret: exchange_data.client_write_secret,
-            server_mac_secret: exchange_data.server_write_secret,
-            read_key: exchange_data.client_write_key,
-            write_key: exchange_data.server_write_key,
+        // Switch read processor to RC4 with new key
+        let key = Rc4::new(&state.client_write_key);
+        let mut mac_secret = [0u8; 16];
+        mac_secret.copy_from_slice(&state.client_write_secret);
+        self.stream.read_processor = ReadProcessor::RC4 {
+            mac_secret,
+            key
         };
-
-        Ok(FinishedData {
-            master_key: exchange_data.master_key,
-        })
+        Ok(())
     }
 
     /// Accepts the finishing message from the client switching the clients
     /// CipherSpec and writing back the finished message
-    fn accept_finished(&mut self, finished_data: FinishedData) -> SslResult<()> {
-        let master_key = &finished_data.master_key;
-
+    fn accept_finished(&mut self, state: &CryptographicState) -> SslResult<()> {
         match self.next_handshake()? {
             HandshakePayload::Finished(md5_hash, sha_hash) => {
-                // Compute expected client hashes and check them against the provided ones
-                let exp_sha_hash = compute_finished_sha(master_key, FinishedSender::Client, &self.transcript);
-                let exp_md5_hash = compute_finished_md5(master_key, FinishedSender::Client, &self.transcript);
-                if exp_sha_hash != sha_hash || exp_md5_hash != md5_hash {
+                if !self.check_client_hashes(&state.master_key, md5_hash, sha_hash) {
                     return Err(SslError::Failure);
                 }
             },
             _ => return Err(SslError::UnexpectedMessage),
         };
 
-        let server_md5_hash = compute_finished_md5(master_key, FinishedSender::Server, &self.transcript);
-        let server_sha_hash = compute_finished_sha(master_key, FinishedSender::Server, &self.transcript);
+        self.emit_cipher_change_spec(state)?;
+        self.emit_finished(state)?;
+        Ok(())
+    }
 
+    /// Emits the ChangeCipherSpec message to the client telling it to change
+    /// cipher spec and switches the stream write processor to the RC4
+    /// encrypting processor
+    fn emit_cipher_change_spec(&mut self, state: &CryptographicState) -> SslResult<()> {
         let cipher_spec_msg = Message {
-            ty: MessageType::ChangeCipherSpec,
+            message_type: MessageType::ChangeCipherSpec,
             payload: vec![1],
         };
-
         self.stream.write_message(cipher_spec_msg)?;
+
+        // Switch read processor to RC4 with new key
+        let key = Rc4::new(&state.server_write_key);
+        let mut mac_secret = [0u8; 16];
+        mac_secret.copy_from_slice(&state.server_write_secret);
+        self.stream.write_processor = WriteProcessor::RC4 {
+            mac_secret,
+            key
+        };
+        Ok(())
+    }
+
+    /// Computes and compares the client hashes for the handshaking process returning
+    /// whether they are matching hashes
+    fn check_client_hashes(&mut self, master_key: &[u8; 48], md5_hash: [u8; 16], sha_hash: [u8; 20]) -> bool {
+        let exp_sha_hash = compute_finished_sha(master_key, FinishedSender::Client, &self.transcript);
+        let exp_md5_hash = compute_finished_md5(master_key, FinishedSender::Client, &self.transcript);
+        exp_md5_hash == md5_hash && exp_sha_hash == sha_hash
+    }
+
+    fn emit_finished(&mut self, state: &CryptographicState) -> SslResult<()> {
+        let master_key = &state.master_key;
+
+        let server_md5_hash = compute_finished_md5(master_key, FinishedSender::Server, &self.transcript);
+        let server_sha_hash = compute_finished_sha(master_key, FinishedSender::Server, &self.transcript);
 
         let message = HandshakePayload::Finished(server_md5_hash, server_sha_hash)
             .as_message();
@@ -376,104 +393,100 @@ impl<S> HandshakingStream<S>
     }
 }
 
-/// Structure representing known types for encoding and decoding messages
-pub enum MessageProcessor {
-    None,
-    RC4 {
-        server_mac_secret: [u8; 16],
-        client_mac_secret: [u8; 16],
 
-        read_key: Rc4,
-        write_key: Rc4,
-    },
+
+/// Handler for processing messages that need to be written
+/// converts them to writing messages
+pub enum WriteProcessor {
+    /// NO-OP Write processor which directly converts the message to OpaqueMessage
+    None,
+    /// RC4 Encryption processor which encrypts the message before converting
+    RC4 {
+        key: Rc4,
+        mac_secret: [u8; 16]
+    }
 }
 
-impl MessageProcessor {
-    pub fn compute_mac(write_secret: &[u8], ty: u8, message: &[u8], seq: u64) -> [u8; 16] {
-        let mut digest = Md5::new();
-        let mut out = [0u8; 16];
-        let pad1 = [0x36; 48];
-        let pad2 = [0x5c; 48];
-        // A = hash(MAC_write_secret + pad_1 + seq_num + SSLCompressed.type + SSLCompressed.length + SSLCompressed.fragment)
-        digest.input(write_secret);
-        digest.input(&pad1);
-        digest.input(&seq.to_be_bytes());
-        digest.input(&[ty]);
-        digest.input(&message.len().to_be_bytes());
-        digest.input(message);
-        digest.result(&mut out);
-        digest.reset();
+impl WriteProcessor {
 
-        // hash(MAC_write_secret + pad_2 + A);
-        digest.input(write_secret);
-        digest.input(&pad2);
-        digest.input(&out);
-        digest.result(&mut out);
-        out
-    }
-
-    pub fn encrypt(&mut self, message: BorrowedMessage, seq: u64) -> OpaqueMessage {
+    /// Processes the provided message using the underlying method and creates an
+    /// Opaque message that can be written from it.
+    ///
+    /// `message` The message to process for writing
+    /// `seq` The current sequence number for this message
+    pub fn process(&mut self, message: BorrowedMessage, seq: u64) -> OpaqueMessage {
         match self {
-            MessageProcessor::None => OpaqueMessage {
-                ty: message.content_type,
-                payload: message.payload.to_vec(),
+            // NO-OP directly convert message into output
+            WriteProcessor::None => OpaqueMessage {
+                message_type: message.message_type,
+                payload: message.payload.to_vec()
             },
-            MessageProcessor::RC4 {
-                write_key,
-                server_mac_secret,
-                ..
-            } => {
-                let mut payload_in = message.payload.to_vec();
-                let mac = Self::compute_mac(
-                    server_mac_secret,
-                    message.content_type.value(),
-                    &payload_in,
-                    seq,
-                );
-                payload_in.extend_from_slice(&mac);
-                let mut payload_out = vec![0u8; payload_in.len()];
-                write_key.process(&payload_in, &mut payload_out);
+            // RC4 Encryption
+            WriteProcessor::RC4 { key, mac_secret } => {
+                let mut payload = message.payload.to_vec();
+                let mac = compute_mac(mac_secret, message.message_type.value(), &payload, seq);
+                payload.extend_from_slice(&mac);
+
+                let mut payload_enc = vec![0u8; payload.len()];
+                key.process(&payload, &mut payload_enc);
                 OpaqueMessage {
-                    ty: message.content_type,
-                    payload: payload_out,
+                    message_type: message.message_type,
+                    payload: payload_enc
                 }
             }
         }
     }
+}
 
-    pub fn decrypt(&mut self, message: OpaqueMessage, seq: u64) -> Message {
-        match self {
-            MessageProcessor::None => Message {
-                ty: message.ty,
+/// Handler for processing messages that have been read
+/// and turning them into their actual messages
+pub enum ReadProcessor {
+    /// NO-OP Write processor which directly converts the message to Message
+    None,
+    /// RC4 Decryption processor which decrypts the message before converting
+    RC4 {
+        key: Rc4,
+        mac_secret: [u8; 16]
+    }
+}
+
+#[derive(Debug)]
+pub enum DecryptError {
+    /// The mac address of the decrypted payload didn't match the
+    /// computed value
+    InvalidMac,
+}
+
+type DecryptResult<T> = Result<T, DecryptError>;
+
+impl ReadProcessor {
+    pub fn process(&mut self, message: OpaqueMessage, seq: u64) -> DecryptResult<Message> {
+        Ok(match self {
+            // NO-OP directly convert message into output
+            ReadProcessor::None => Message {
+                message_type: message.message_type,
                 payload: message.payload,
             },
-            MessageProcessor::RC4 {
-                read_key,
-                client_mac_secret,
-                server_mac_secret,
-                ..
-            } => {
-                let mut payload = vec![0u8; message.payload.len()];
-                read_key.process(&message.payload, &mut payload);
-                let mac_cutoff = payload.len() - 16;
+            // RC4 Decryption
+            ReadProcessor::RC4 { key, mac_secret } => {
+                let mut payload_and_mac = vec![0u8; message.payload.len()];
+                key.process(&message.payload, &mut payload_and_mac);
 
-                let mac = &payload[mac_cutoff..];
-                let payload = &payload[..mac_cutoff];
+                let mac_start = payload_and_mac.len() - 16;
+                let payload = &payload_and_mac[..mac_start];
 
-                let expected_mac_a =
-                    Self::compute_mac(client_mac_secret, message.ty.value(), &payload, seq);
+                let mac = &payload_and_mac[mac_start..];
+                let expected_mac = compute_mac(mac_secret, message.message_type.value(), &payload, seq);
 
-                let expected_mac_b =
-                    Self::compute_mac(server_mac_secret, message.ty.value(), &payload, seq);
-
-                // TODO: Check mac
-                println!("Decrypted message: \nREAL: {mac:?}\nCLIE: {expected_mac_a:?}\nSERV: {expected_mac_b:?}");
+                if !expected_mac.eq(mac) {
+                    return Err(DecryptError::InvalidMac)
+                }
 
                 Message {
-                    ty: message.ty,
+                    message_type: message.message_type,
                     payload: payload.to_vec(),
                 }
             }
-        }
+        })
     }
 }
