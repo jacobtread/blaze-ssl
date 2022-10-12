@@ -5,6 +5,8 @@ use rsa::pkcs8::DecodePrivateKey;
 use rsa::RsaPrivateKey;
 use std::net::TcpListener;
 use std::thread;
+use std::thread::sleep;
+use std::time::Duration;
 use stream::SslStream;
 
 pub mod codec;
@@ -67,10 +69,12 @@ fn main() {
         let key = key.clone();
         let cert = cert.clone();
         thread::spawn(move || {
-            println!("Connection");
             let stream = stream.expect("Failed to accept stream");
             let _stream =
                 &mut SslStream::new(stream, cert, key).expect("Failed to complete handshake");
+            loop {
+                sleep(Duration::from_secs(5))
+            }
         });
     }
 }

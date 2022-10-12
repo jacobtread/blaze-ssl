@@ -4,6 +4,12 @@ use crate::codec::{
 use crate::constants::{PROTOCOL_SSL3, TLS_RSA_WITH_RC4_128_MD5};
 use crate::msgs::{Message, MessageType};
 
+#[derive(Debug)]
+pub struct HandshakeMessage {
+    pub payload: HandshakePayload,
+    pub raw: Vec<u8>,
+}
+
 /// Enum representing different types of possible handshake
 /// payloads.
 #[derive(Debug)]
@@ -18,12 +24,12 @@ pub enum HandshakePayload {
 }
 
 impl HandshakePayload {
-    const CLIENT_HELLO: u8 = 1;
-    const SERVER_HELLO: u8 = 2;
-    const CERTIFICATE: u8 = 11;
-    const SERVER_HELLO_DONE: u8 = 14;
-    const CLIENT_KEY_EXCHANGE: u8 = 16;
-    const FINISHED: u8 = 20;
+    pub const CLIENT_HELLO: u8 = 1;
+    pub const SERVER_HELLO: u8 = 2;
+    pub const CERTIFICATE: u8 = 11;
+    pub const SERVER_HELLO_DONE: u8 = 14;
+    pub const CLIENT_KEY_EXCHANGE: u8 = 16;
+    pub const FINISHED: u8 = 20;
 
     /// Retrieves the u8 type code for this payload type
     fn value(&self) -> u8 {
@@ -50,7 +56,7 @@ impl HandshakePayload {
 
     /// Encodes the contents of this payload into a Vec of bytes so
     /// that it can be converted to a Message
-    fn encode(&self) -> Vec<u8> {
+    pub(crate) fn encode(&self) -> Vec<u8> {
         let mut content = Vec::new();
         match self {
             HandshakePayload::ServerHello(random) => {
@@ -111,5 +117,19 @@ impl HandshakePayload {
             }
             _ => HandshakePayload::Unknown,
         })
+    }
+}
+
+/// Buffer storing handshake payloads so that the finished hash can be
+/// computed
+pub struct HandshakeHashBuffer(pub Vec<u8>);
+
+impl HandshakeHashBuffer {
+    pub fn push_raw(&mut self, message: &Vec<u8>) {
+        self.0.extend_from_slice(message);
+    }
+
+    pub fn push_msg(&mut self, message: &Message) {
+        self.0.extend_from_slice(&message.payload);
     }
 }

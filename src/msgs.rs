@@ -1,5 +1,5 @@
 use crate::codec::{u24, Codec, Reader};
-use crate::handshake::HandshakePayload;
+use crate::handshake::{HandshakeMessage, HandshakePayload};
 use std::collections::VecDeque;
 use std::io;
 use std::io::Read;
@@ -50,6 +50,16 @@ impl MessageType {
             MessageType::Unknown(value) => *value,
         }
     }
+
+    pub fn from_value(value: u8) -> MessageType {
+        match value {
+            0x14 => Self::ChangeCipherSpec,
+            0x15 => Self::Alert,
+            0x16 => Self::Handshake,
+            0x17 => Self::ApplicationData,
+            value => Self::Unknown(value),
+        }
+    }
 }
 
 impl Codec for MessageType {
@@ -58,13 +68,7 @@ impl Codec for MessageType {
     }
 
     fn decode(input: &mut Reader) -> Option<Self> {
-        Some(match input.take_byte()? {
-            0x14 => Self::ChangeCipherSpec,
-            0x15 => Self::Alert,
-            0x16 => Self::Handshake,
-            0x17 => Self::ApplicationData,
-            value => Self::Unknown(value),
-        })
+        Some(MessageType::from_value(input.take_byte()?))
     }
 }
 
@@ -241,7 +245,7 @@ const MAX_HANDSHAKE_SIZE: u32 = 0xffff;
 /// one handshake payload.
 pub struct HandshakeJoiner {
     /// Completed handshake frames for output.
-    pub payloads: VecDeque<HandshakePayload>,
+    pub payloads: VecDeque<HandshakeMessage>,
 
     /// The message payload we're currently accumulating.
     buf: Vec<u8>,
@@ -275,7 +279,7 @@ impl HandshakeJoiner {
 
     /// Attempts to take the next handshake payload if there
     /// are any available
-    pub fn next(&mut self) -> Option<HandshakePayload> {
+    pub fn next(&mut self) -> Option<HandshakeMessage> {
         self.payloads.pop_front()
     }
 
@@ -299,16 +303,9 @@ impl HandshakeJoiner {
         let mut count = 0;
         loop {
             match self.buf_contains_message() {
-                BufferState::MessageTooLarge => {
-                    println!("Message too large");
-                    return None;
-                }
-                BufferState::NeedsMoreData => {
-                    println!("Needs more data");
-                    break;
-                }
+                BufferState::MessageTooLarge => return None,
+                BufferState::NeedsMoreData => break,
                 BufferState::OneMessage => {
-                    println!("Contains message");
                     if !self.deframe_one() {
                         return None;
                     }
@@ -344,13 +341,15 @@ impl HandshakeJoiner {
     fn deframe_one(&mut self) -> bool {
         let used = {
             let mut rd = Reader::new(&self.buf);
-            let parsed = match HandshakePayload::decode(&mut rd) {
+            let payload = match HandshakePayload::decode(&mut rd) {
                 Some(p) => p,
                 None => return false,
             };
 
-            self.payloads.push_back(parsed);
-            rd.cursor()
+            let length = rd.cursor();
+            let raw = self.buf[0..length].to_vec();
+            self.payloads.push_back(HandshakeMessage { payload, raw, });
+            length
         };
         self.buf = self.buf.split_off(used);
         true
