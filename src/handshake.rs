@@ -128,14 +128,31 @@ impl HandshakePayload {
 
 /// Buffer storing handshake payloads so that the finished hash can be
 /// computed
-pub struct HandshakeHashBuffer(pub Vec<u8>);
+pub struct Transcript {
+    pub full: Vec<u8>,
+    pub client: Vec<u8>,
+}
 
-impl HandshakeHashBuffer {
+
+impl Transcript {
+    pub fn new() -> Self {
+        Self {
+            full: Vec::new(),
+            client: Vec::new(),
+        }
+    }
+
     pub fn push_raw(&mut self, message: &Vec<u8>) {
-        self.0.extend_from_slice(message);
+        self.full.extend_from_slice(message);
     }
 
     pub fn push_msg(&mut self, message: &Message) {
-        self.0.extend_from_slice(&message.payload);
+        self.full.extend_from_slice(&message.payload);
+    }
+
+    /// Finishes the client portion of the buffer clones the
+    /// existing buffer so that it can be used
+    pub fn finish_client(&mut self) {
+        self.client.extend_from_slice(&self.full)
     }
 }

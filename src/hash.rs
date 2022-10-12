@@ -1,4 +1,3 @@
-use crate::handshake::HandshakeHashBuffer;
 use crypto::digest::Digest;
 use crypto::md5::Md5;
 use crypto::sha1::Sha1;
@@ -73,13 +72,13 @@ impl FinishedSender {
 pub fn compute_finished_md5(
     master_secret: &[u8],
     sender: FinishedSender,
-    hash_buffer: &HandshakeHashBuffer,
+    transcript: &[u8],
 ) -> [u8; 16] {
     let mut digest = Md5::new();
     let mut out = [0u8; 16];
     let pad1 = [0x36; 48];
     let pad2 = [0x5c; 48];
-    digest.input(&hash_buffer.0);
+    digest.input(transcript);
     digest.input(&sender.value());
     digest.input(master_secret);
     digest.input(&pad1);
@@ -96,14 +95,14 @@ pub fn compute_finished_md5(
 pub fn compute_finished_sha(
     master_secret: &[u8],
     sender: FinishedSender,
-    hash_buffer: &HandshakeHashBuffer,
+    transcript: &[u8],
 ) -> [u8; 20]{
     let mut digest = Sha1::new();
     let mut out = [0u8; 20];
 
     let pad1 = [0x36; 40];
     let pad2 = [0x5c; 40];
-    digest.input(&hash_buffer.0);
+    digest.input(transcript);
     digest.input(&sender.value());
     digest.input(master_secret);
     digest.input(&pad1);

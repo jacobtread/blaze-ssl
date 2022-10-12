@@ -1,7 +1,7 @@
 use std::cmp;
 use crate::codec::{Certificate, SSLRandom};
 use crate::constants::PROTOCOL_SSL3;
-use crate::handshake::{HandshakeHashBuffer, HandshakePayload};
+use crate::handshake::{Transcript, HandshakePayload};
 use crate::hash::{generate_key_block, FinishedSender, compute_finished_md5, compute_finished_sha, compute_mac};
 use crate::msgs::{
     fragment_message, BorrowedMessage, HandshakeJoiner, MessageDeframer, OpaqueMessage,
@@ -79,16 +79,6 @@ pub struct SslStream<S> {
     write_buffer: Vec<u8>,
 }
 
-impl<S> SslStream<S> {
-    pub fn get_ref(&self) -> &S {
-        &self.stream
-    }
-
-    pub fn get_mut(&mut self) -> &mut S {
-        &mut self.stream
-    }
-}
-
 #[derive(Debug)]
 pub enum SslError {
     IO(io::Error),
@@ -124,7 +114,7 @@ impl<S> SslStream<S>
         let handshaking = HandshakingStream {
             stream,
             joiner: HandshakeJoiner::new(),
-            transcript: HandshakeHashBuffer(Vec::new()),
+            transcript: Transcript::new(),
         };
         handshaking.handshake()
     }
@@ -218,19 +208,8 @@ impl<S> Read for SslStream<S>
 pub struct HandshakingStream<S> {
     stream: SslStream<S>,
     joiner: HandshakeJoiner,
-    transcript: HandshakeHashBuffer,
+    transcript: Transcript,
 }
-
-impl<S> HandshakingStream<S> {
-    pub fn get_ref(&self) -> &S {
-        self.stream.get_ref()
-    }
-
-    pub fn get_mut(&mut self) -> &mut S {
-        self.stream.get_mut()
-    }
-}
-
 /// Type of pre master key
 pub type PreMasterKey = [u8; 48];
 /// Type of master key
@@ -267,10 +246,11 @@ impl<S> HandshakingStream<S>
             if let Some(message) = self.joiner.next() {
                 let payload = message.payload;
 
-                if !matches!(&payload, HandshakePayload::Finished(_, _)) {
-                    self.transcript.push_raw(&message.raw);
+                if matches!(&payload, HandshakePayload::Finished(_, _)) {
+                    // Finish the client transcription
+                    self.transcript.finish_client();
                 }
-
+                self.transcript.push_raw(&message.raw);
                 return Ok(payload);
             } else {
                 let message = self.stream.next_message()?;
@@ -456,8 +436,8 @@ impl<S> HandshakingStream<S>
     /// Computes and compares the client hashes for the handshaking process returning
     /// whether they are matching hashes
     fn check_client_hashes(&mut self, master_key: &[u8; 48], md5_hash: [u8; 16], sha_hash: [u8; 20]) -> bool {
-        let exp_sha_hash = compute_finished_sha(master_key, FinishedSender::Client, &self.transcript);
-        let exp_md5_hash = compute_finished_md5(master_key, FinishedSender::Client, &self.transcript);
+        let exp_md5_hash = compute_finished_md5(master_key, FinishedSender::Client, &self.transcript.client);
+        let exp_sha_hash = compute_finished_sha(master_key, FinishedSender::Client, &self.transcript.client);
         exp_md5_hash == md5_hash && exp_sha_hash == sha_hash
     }
 
@@ -466,8 +446,8 @@ impl<S> HandshakingStream<S>
     fn emit_finished(&mut self, state: &CryptographicState) -> SslResult<()> {
         let master_key = &state.master_key;
 
-        let server_md5_hash = compute_finished_md5(master_key, FinishedSender::Server, &self.transcript);
-        let server_sha_hash = compute_finished_sha(master_key, FinishedSender::Server, &self.transcript);
+        let server_md5_hash = compute_finished_md5(master_key, FinishedSender::Server, &self.transcript.full);
+        let server_sha_hash = compute_finished_sha(master_key, FinishedSender::Server, &self.transcript.full);
 
         let message = HandshakePayload::Finished(server_md5_hash, server_sha_hash)
             .as_message();
