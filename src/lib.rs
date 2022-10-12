@@ -1,9 +1,11 @@
 pub mod codec;
 pub mod constants;
 pub mod handshake;
-pub mod hash;
+pub mod crypto;
 pub mod msgs;
 pub mod stream;
+pub mod server;
+pub mod client;
 
 
 #[cfg(test)]
@@ -13,7 +15,7 @@ mod test {
     use std::thread;
     use std::thread::sleep;
     use std::time::Duration;
-    use crate::stream::BlazeStream;
+    use crate::stream::{BlazeStream, StreamMode};
 
     #[test]
     fn test() {
@@ -25,7 +27,7 @@ mod test {
             thread::spawn(move || {
                 let stream = stream.expect("Failed to accept stream");
                 let stream =
-                    &mut BlazeStream::new(stream).expect("Failed to complete handshake");
+                    &mut BlazeStream::new(stream, StreamMode::Server).expect("Failed to complete handshake");
                 let mut buf = [0u8; 1024];
                 loop {
                     buf.fill(0);

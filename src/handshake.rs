@@ -14,9 +14,9 @@ pub struct HandshakeMessage {
 /// payloads.
 #[derive(Debug)]
 pub enum HandshakePayload {
-    ClientHello(u16, SSLRandom),
+    ClientHello(SSLRandom),
     ServerHello(SSLRandom),
-    Certificate(&'static Certificate),
+    Certificate(Certificate),
     ServerHelloDone,
     ClientKeyExchange(Vec<u8>),
     Finished([u8; 16], [u8; 20]),
@@ -34,7 +34,7 @@ impl HandshakePayload {
     /// Retrieves the u8 type code for this payload type
     fn value(&self) -> u8 {
         match self {
-            HandshakePayload::ClientHello(_, _) => Self::CLIENT_HELLO,
+            HandshakePayload::ClientHello(_) => Self::CLIENT_HELLO,
             HandshakePayload::ServerHello(_) => Self::SERVER_HELLO,
             HandshakePayload::Certificate(_) => Self::CERTIFICATE,
             HandshakePayload::ServerHelloDone => Self::SERVER_HELLO_DONE,
@@ -59,6 +59,25 @@ impl HandshakePayload {
     pub(crate) fn encode(&self) -> Vec<u8> {
         let mut content = Vec::new();
         match self {
+            HandshakePayload::ClientHello(random) => {
+                PROTOCOL_SSL3.encode(&mut content);
+                random.encode(&mut content);
+                // NO-OP Session ID
+                content.push(0);
+
+                // Two cipher suites
+                u16::encode(&2, &mut content);
+
+                TLS_RSA_WITH_RC4_128_MD5.encode(&mut content);
+                TLS_RSA_WITH_RC4_128_MD5.encode(&mut content);
+
+                // Null compression
+                content.push(1);
+                content.push(0);
+            }
+            HandshakePayload::ClientKeyExchange(value) => {
+                content.extend_from_slice(value)
+            }
             HandshakePayload::ServerHello(random) => {
                 PROTOCOL_SSL3.encode(&mut content);
                 random.encode(&mut content);
@@ -102,12 +121,33 @@ impl HandshakePayload {
         let mut contents = input.slice(length)?;
         Some(match ty {
             HandshakePayload::CLIENT_HELLO => {
-                let client_version = u16::decode(&mut contents)?;
+                let _client_version = u16::decode(&mut contents)?;
                 let client_random = SSLRandom::decode(&mut contents)?;
                 let _session = decode_vec_u8::<u8>(&mut contents)?;
                 let _cipher_suites = decode_vec_u16::<u16>(&mut contents)?;
                 let _compression_methods = decode_vec_u8::<u8>(&mut contents)?;
-                HandshakePayload::ClientHello(client_version, client_random)
+                HandshakePayload::ClientHello(client_random)
+            }
+            HandshakePayload::SERVER_HELLO => {
+                let _server_version = u16::decode(&mut contents)?;
+                let server_random = SSLRandom::decode(&mut contents)?;
+
+                let _session = decode_vec_u8::<u8>(&mut contents)?;
+                let _cipher_suite = contents.take_byte()?;
+                let _compression_method = contents.take_byte()?;
+
+                HandshakePayload::ServerHello(server_random)
+            }
+            HandshakePayload::CERTIFICATE => {
+                let len = u24::decode(&mut contents)?.0;
+                if len < 1 {
+                    return None
+                }
+                let cert = Certificate::decode(&mut contents)?;
+                HandshakePayload::Certificate(cert)
+            }
+            HandshakePayload::SERVER_HELLO_DONE => {
+                HandshakePayload::ServerHelloDone
             }
             HandshakePayload::CLIENT_KEY_EXCHANGE => {
                 HandshakePayload::ClientKeyExchange(contents.remaining().to_vec())
@@ -153,6 +193,7 @@ impl Transcript {
     /// Finishes the client portion of the buffer clones the
     /// existing buffer so that it can be used
     pub fn finish_client(&mut self) {
+        self.client.clear();
         self.client.extend_from_slice(&self.full)
     }
 }

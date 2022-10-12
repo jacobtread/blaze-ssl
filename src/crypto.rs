@@ -2,6 +2,46 @@ use crypto::digest::Digest;
 use crypto::md5::Md5;
 use crypto::sha1::Sha1;
 
+
+/// Structure for storing cryptographic keys and
+/// state that may be required
+pub struct CryptographicState {
+    pub(crate) master_key: [u8; 48],
+    pub(crate) client_write_secret: [u8; 16],
+    pub(crate) server_write_secret: [u8; 16],
+    pub(crate) client_write_key: [u8; 16],
+    pub(crate) server_write_key: [u8; 16],
+}
+
+/// Creates the cryptographic state from the provided pre-master secret client random
+/// and server random
+pub fn create_crypto_state(pm_key: &[u8], cr: &[u8; 32], sr: &[u8; 32]) -> CryptographicState {
+    let mut master_key = [0u8; 48];
+    generate_key_block(&mut master_key, &pm_key, cr, sr);
+
+    // Generate key block 80 bytes long (20x2 for write secrets + 16x2 for write keys) only 72 bytes used
+    let mut key_block = [0u8; 64];
+    generate_key_block(&mut key_block, &master_key, sr, cr);
+
+    let mut client_write_secret = [0u8; 16];
+    client_write_secret.copy_from_slice(&key_block[0..16]);
+    let mut server_write_secret = [0u8; 16];
+    server_write_secret.copy_from_slice(&key_block[16..32]);
+
+    let mut client_write_key = [0u8; 16];
+    client_write_key.copy_from_slice(&key_block[32..48]);
+    let mut server_write_key = [0u8; 16];
+    server_write_key.copy_from_slice(&key_block[48..64]);
+
+    CryptographicState {
+        master_key,
+        client_write_secret,
+        server_write_secret,
+        client_write_key,
+        server_write_key,
+    }
+}
+
 pub fn generate_key_block(out: &mut [u8], pm: &[u8], rand_1: &[u8; 32], rand_2: &[u8; 32]) {
     // The digest use for the outer hash
     let mut outer = Md5::new();
