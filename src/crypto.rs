@@ -2,6 +2,11 @@ use crypto::digest::Digest;
 use crypto::md5::Md5;
 use crypto::sha1::Sha1;
 
+/// TODO: Implement both method allowance
+pub enum HashingMethod {
+    Md5,
+    Sha,
+}
 
 /// Structure for storing cryptographic keys and
 /// state that may be required

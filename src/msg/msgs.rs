@@ -142,8 +142,8 @@ impl OpaqueMessage {
         }
 
         let mut payload = input
-            .slice(length as usize)
-            .ok_or(MessageError::TooShortForLength)?;
+        .slice(length as usize)
+        .ok_or(MessageError::TooShortForLength)?;
         let payload = payload.remaining().to_vec();
 
         Ok(Self {
@@ -151,33 +151,6 @@ impl OpaqueMessage {
             payload,
         })
     }
-}
-
-impl OpaqueMessage {
-    /// This is the maximum on-the-wire size of a TLSCiphertext.
-    /// That's 2^14 payload bytes, a header, and a 2KB allowance
-    /// for ciphertext overheads.
-    const MAX_PAYLOAD: u16 = 16384 + 2048;
-    /// Content type, version and size.
-    const HEADER_SIZE: u16 = 1 + 2 + 2;
-    /// Maximum on-wire message size.
-    pub const MAX_WIRE_SIZE: usize = (Self::MAX_PAYLOAD + Self::HEADER_SIZE) as usize;
-}
-
-pub const MAX_FRAGMENT_LEN: usize = 16384;
-
-/// Fragments the provided message into an iterator
-/// of borrowed messages that fit the same chunks
-pub fn fragment_message<'a>(
-    message: &'a Message,
-) -> impl Iterator<Item=BorrowedMessage<'a>> + 'a {
-    message
-        .payload
-        .chunks(MAX_FRAGMENT_LEN)
-        .map(move |c| BorrowedMessage {
-            message_type: message.message_type.clone(),
-            payload: c,
-        })
 }
 
 /// Structure for taking chunks of bytes and turning them

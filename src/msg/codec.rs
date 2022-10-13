@@ -205,53 +205,64 @@ pub fn decode_vec_u16<C: Codec>(input: &mut Reader) -> Option<Vec<C>> {
     Some(values)
 }
 
-/// The certificate must be DER-encoded X.509.
-#[derive(Debug, Clone, Eq, Hash, PartialEq)]
-pub struct Certificate(pub Vec<u8>);
-
-/// The encoding for the certificates is the same as that of PayloadU24
-/// TODO: look into merging these structs or creating a conversion.
-impl Codec for Certificate {
-    fn encode(&self, output: &mut Vec<u8>) {
-        u24(self.0.len() as u32).encode(output);
-        output.extend_from_slice(&self.0)
+pub fn decode_vec_u24_limited<T: Codec>(r: &mut Reader, max_bytes: usize) -> Option<Vec<T>> {
+    let mut ret: Vec<T> = Vec::new();
+    let len = u24::read(r)?.0 as usize;
+    if len > max_bytes {
+        return None;
     }
 
-    fn decode(input: &mut Reader) -> Option<Self> {
-        let length = u24::decode(input)?.0 as usize;
-        let mut reader = input.slice(length)?;
-        let content = reader.remaining().to_vec();
-        Some(Self(content))
+    let mut sub = r.sub(len)?;
+
+    while sub.any_left() {
+        ret.push(T::read(&mut sub)?);
     }
+
+    Some(ret)
 }
 
-/// Contents of SSL Random
-pub type RandomBytes = [u8; 32];
+pub fn encode_vec_u8<T: Codec>(bytes: &mut Vec<u8>, items: &[T]) {
+    let len_offset = bytes.len();
+    bytes.push(0);
 
-/// Structure representing a random slice of 32 bytes
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct SSLRandom(pub [u8; 32]);
-
-#[derive(Debug)]
-pub struct GetRandomFailed;
-
-impl SSLRandom {
-    pub fn new() -> Result<Self, GetRandomFailed> {
-        let mut data = [0u8; 32];
-        getrandom::getrandom(&mut data).map_err(|_| GetRandomFailed)?;
-        Ok(Self(data))
+    for i in items {
+        i.encode(bytes);
     }
+
+    let len = bytes.len() - len_offset - 1;
+    debug_assert!(len <= 0xff);
+    bytes[len_offset] = len as u8;
 }
 
-impl Codec for SSLRandom {
-    fn encode(&self, output: &mut Vec<u8>) {
-        output.extend_from_slice(&self.0);
+pub fn encode_vec_u16<T: Codec>(bytes: &mut Vec<u8>, items: &[T]) {
+    let len_offset = bytes.len();
+    bytes.extend([0, 0]);
+
+    for i in items {
+        i.encode(bytes);
     }
 
-    fn decode(input: &mut Reader) -> Option<Self> {
-        let bytes = input.take(32)?;
-        let mut opaque = [0; 32];
-        opaque.copy_from_slice(bytes);
-        Some(Self(opaque))
+    let len = bytes.len() - len_offset - 2;
+    debug_assert!(len <= 0xffff);
+    let out: &mut [u8; 2] = (&mut bytes[len_offset..len_offset + 2])
+    .try_into()
+    .unwrap();
+    *out = u16::to_be_bytes(len as u16);
+}
+
+pub fn encode_vec_u24<T: Codec>(bytes: &mut Vec<u8>, items: &[T]) {
+    let len_offset = bytes.len();
+    bytes.extend([0, 0, 0]);
+
+    for i in items {
+        i.encode(bytes);
     }
+
+    let len = bytes.len() - len_offset - 3;
+    debug_assert!(len <= 0xff_ffff);
+    let len_bytes = u32::to_be_bytes(len as u32);
+    let out: &mut [u8; 3] = (&mut bytes[len_offset..len_offset + 3])
+    .try_into()
+    .unwrap();
+    out.copy_from_slice(&len_bytes[1..]);
 }

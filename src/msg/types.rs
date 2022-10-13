@@ -1,4 +1,5 @@
 //! Module containing types that are used throughout the protocol
+use super::{u24, Reader, Codec};
 
 codec_enum! {
     // Enum describing the type of content stored in a SSLMessage
@@ -44,5 +45,63 @@ codec_enum! {
     // thats the only protocol we implement
     (u16) enum ProtocolVersion {
         SSLv3 = 0x0300
+    }
+}
+
+codec_enum! {
+
+    // Cipher suites known to this application
+    (u16) enum CipherSuite {
+        TLS_RSA_WITH_RC4_128_SHA = 0x0005,
+        TLS_RSA_WITH_RC4_128_MD5 = 0x0004
+    }
+
+}
+
+/// The certificate must be DER-encoded X.509.
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
+pub struct Certificate(pub Vec<u8>);
+
+/// The encoding for the certificates is the same as that of PayloadU24
+/// TODO: look into merging these structs or creating a conversion.
+impl Codec for Certificate {
+    fn encode(&self, output: &mut Vec<u8>) {
+        u24(self.0.len() as u32).encode(output);
+        output.extend_from_slice(&self.0)
+    }
+
+    fn decode(input: &mut Reader) -> Option<Self> {
+        let length = u24::decode(input)?.0 as usize;
+        let mut reader = input.slice(length)?;
+        let content = reader.remaining().to_vec();
+        Some(Self(content))
+    }
+}
+
+/// Structure representing a random slice of 32 bytes
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct SSLRandom(pub [u8; 32]);
+
+#[derive(Debug)]
+pub struct GetRandomFailed;
+
+impl SSLRandom {
+    pub fn new() -> Result<Self, GetRandomFailed> {
+        let mut data = [0u8; 32];
+        getrandom::getrandom(&mut data).map_err(|_| GetRandomFailed)?;
+        Ok(Self(data))
+    }
+}
+
+impl Codec for SSLRandom {
+    fn encode(&self, output: &mut Vec<u8>) {
+        output.extend_from_slice(&self.0);
+    }
+
+    fn decode(input: &mut Reader) -> Option<Self> {
+        let bytes = input.take(32)?;
+        let mut opaque = [0; 32];
+        opaque.copy_from_slice(bytes);
+        Some(Self(opaque))
     }
 }
