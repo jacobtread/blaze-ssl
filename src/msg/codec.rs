@@ -71,11 +71,6 @@ impl<'a> Reader<'a> {
     pub fn slice(&mut self, length: usize) -> Option<Reader> {
         self.take(length).map(Reader::new)
     }
-
-    /// Resets the cursor back to the starting position of the buffer
-    pub fn reset(&mut self) {
-        self.cursor = 0;
-    }
 }
 
 /// Trait implementing a structure for reading and writing

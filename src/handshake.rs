@@ -25,32 +25,6 @@ pub enum HandshakeSide {
     Client,
 }
 
-/// Structure for storing the random values from
-/// the client and server responses
-#[derive(Debug)]
-pub struct HelloData {
-    client_random: SSLRandom,
-    server_random: SSLRandom,
-}
-
-impl HandshakeSide {
-    pub fn is_server(&self) -> bool {
-        if let Self::Server = self {
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn is_client(&self) -> bool {
-        if let Self::Client = self {
-            true
-        } else {
-            false
-        }
-    }
-}
-
 impl<S> HandshakingWrapper<S>
     where
         S: Read + Write,
@@ -72,7 +46,7 @@ impl<S> HandshakingWrapper<S>
                 let client_random = self.expect_client_hello()?;
                 let server_random = self.emit_server_hello()?;
                 self.emit_certificate()?;
-                self.emit_server_hello()?;
+                self.emit_server_hello_done()?;
                 let pm_secret = self.expect_key_exchange()?;
                 let crypto_state = create_crypto_state(&pm_secret, &client_random.0, &server_random.0);
                 self.expect_change_cipher_spec(&crypto_state)?;
@@ -102,7 +76,7 @@ impl<S> HandshakingWrapper<S>
         loop {
             if let Some(joined) = self.joiner.next() {
                 let handshake = joined.handshake;
-                if self.side.is_server() && matches!(&handshake, HandshakePayload::Finished(_)) {
+                if matches!(&self.side, HandshakeSide::Server) && matches!(&handshake, HandshakePayload::Finished(_)) {
                     self.transcript.finish();
                 }
                 self.transcript.push_raw(&joined.payload);

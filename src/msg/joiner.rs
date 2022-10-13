@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use super::{Message, HandshakePayload, u24, Reader, Codec};
+use super::{Message, HandshakePayload, u24, Reader};
 
 /// Structure of a handshake that was joined by the Handshake joiner. This
 /// structure includes the full length payload that was decoded from so that

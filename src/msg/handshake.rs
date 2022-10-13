@@ -35,16 +35,14 @@ impl HandshakePayload {
 
     /// Converts this payload into a message by encoding it
     pub fn as_message(&self) -> Message {
-        let payload = self.encode_vec();
+        let payload = self.encode();
         Message {
             message_type: MessageType::Handshake,
             payload
         }
     }
-}
 
-impl Codec for HandshakePayload {
-    fn encode(&self, output: &mut Vec<u8>) {
+    fn encode(&self) -> Vec<u8> {
         let mut content = Vec::new();
         match self {
             Self::ClientHello(payload) => payload.encode(&mut content),
@@ -66,9 +64,10 @@ impl Codec for HandshakePayload {
         ty.encode(&mut output);
         length.encode(&mut output);
         output.append(&mut content);
+        output
     }
 
-    fn decode(input: &mut Reader) -> Option<Self> {
+    pub(crate) fn decode(input: &mut Reader) -> Option<Self> {
         let ty = HandshakeType::decode(input)?;
         let length = u24::decode(input)?.0 as usize;
         let mut input = input.slice(length)?;
@@ -187,8 +186,8 @@ impl fmt::Debug for ServerHelloDone {
 }
 
 impl Codec for ServerHelloDone {
-    fn encode(&self, output: &mut Vec<u8>) {}
-    fn decode(input: &mut Reader) -> Option<Self> {
+    fn encode(&self, _output: &mut Vec<u8>) {}
+    fn decode(_input: &mut Reader) -> Option<Self> {
         Some(Self)
     }
 }
