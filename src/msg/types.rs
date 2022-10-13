@@ -49,13 +49,23 @@ codec_enum! {
 }
 
 codec_enum! {
-
     // Cipher suites known to this application
     (u16) enum CipherSuite {
         TLS_RSA_WITH_RC4_128_SHA = 0x0005,
         TLS_RSA_WITH_RC4_128_MD5 = 0x0004
     }
+}
 
+codec_enum! {
+    // Type of handshake message
+    (u8) enum HandshakeType {
+        ClientHello = 1,
+        ServerHello = 2,
+        Certificate = 11,
+        ServerHelloDone = 14,
+        ClientKeyExchange = 16,
+        Finished = 20,
+    }
 }
 
 /// The certificate must be DER-encoded X.509.

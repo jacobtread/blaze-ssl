@@ -7,10 +7,13 @@ mod codec;
 
 mod deframer;
 mod joiner;
+mod transcript;
 
 // Re-exports for structures used throught application
 pub use deframer::MessageDeframer;
 pub use joiner::HandshakeJoiner;
+pub use handshake::HandshakePayload;
+pub use transcript::MessageTranscript;
 pub use codec::*;
 pub use types::*;
 

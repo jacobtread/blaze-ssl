@@ -205,19 +205,13 @@ pub fn decode_vec_u16<C: Codec>(input: &mut Reader) -> Option<Vec<C>> {
     Some(values)
 }
 
-pub fn decode_vec_u24_limited<T: Codec>(r: &mut Reader, max_bytes: usize) -> Option<Vec<T>> {
+pub fn decode_vec_u24<T: Codec>(r: &mut Reader) -> Option<Vec<T>> {
     let mut ret: Vec<T> = Vec::new();
-    let len = u24::read(r)?.0 as usize;
-    if len > max_bytes {
-        return None;
-    }
-
-    let mut sub = r.sub(len)?;
-
+    let len = u24::decode(r)?.0 as usize;
+    let mut sub = r.slice(len)?;
     while sub.any_left() {
-        ret.push(T::read(&mut sub)?);
+        ret.push(T::decode(&mut sub)?);
     }
-
     Some(ret)
 }
 
