@@ -2,38 +2,46 @@ use super::Message;
 
 /// Structure for keeping a record of all the message payloads that have
 /// be sent and recieved. Used for computing Finished hashes. `finish` is
-/// called to copy the current bytes over to `last` this allows keeping
-/// a seperate buffer for computing the hashes of the other side for
-/// comparing
+/// storing the ending position
 #[derive(Debug)]
 pub struct MessageTranscript {
-    pub current: Vec<u8>,
-    pub last: Vec<u8>,
+    buffer: Vec<u8>,
+    end: usize,
 }
 
 impl MessageTranscript {
     /// Creates a new message transcript
     pub fn new() -> Self {
         Self {
-            current: Vec::new(),
-            last: Vec::new(),
+            buffer: Vec::new(),
+            end: 0
         }
     }
 
     /// Appends a raw section of bytes to the transcript
     pub fn push_raw(&mut self, message: &[u8]) {
-        self.current.extend_from_slice(message);
+        self.buffer.extend_from_slice(message);
     }
 
     /// Appends a section of bytes from the message payload to
     /// the transcript
     pub fn push_message(&mut self, message: &Message) {
-        self.current.extend_from_slice(&message.payload)
+        self.buffer.extend_from_slice(&message.payload)
     }
 
-    /// Clears the `last` transcript and copies the current into it
+    /// Sets the ending position to the end of the current
+    /// transcript
     pub fn finish(&mut self) {
-        self.last.clear();
-        self.last.extend_from_slice(&self.current);
+        self.end = self.buffer.len();
+    }
+
+    /// Retrieves the entire buffer up to the most recent data
+    pub fn current(&self) -> &[u8] {
+        &self.buffer
+    }
+
+    /// Retrieves the buffer contents before `finish` was called
+    pub fn last(&self) -> &[u8] {
+        &self.buffer[..self.end]
     }
 }

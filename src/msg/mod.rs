@@ -32,7 +32,7 @@ pub struct OpaqueMessage {
 /// Error types for handling different kinds of issues when
 /// decoding Opaque messages.
 #[derive(Debug)]
-enum MessageError {
+pub enum MessageError {
     TooShort,
     IllegalVersion,
 }
@@ -108,13 +108,30 @@ impl Message {
     /// Fragments the provided `message` into an iterator of borrowed
     /// messages which are chunks of the message payload that are no
     /// greater than MAX_FRAGMENT_LENGTH
-    pub fn fragment<'a>(message: &'a Message) -> impl Iterator<Item = BorrowedMessage<'a>> + 'a {
-        message
+    pub fn fragment<'a>(&'a self) -> impl Iterator<Item = BorrowedMessage<'a>> + 'a {
+        self
             .payload
             .chunks(Self::MAX_FRAGMENT_LENGTH)
             .map(move |c| BorrowedMessage {
-                message_type: message.message_type.clone(),
+                message_type: self.message_type.clone(),
                 payload: c,
             })
+    }
+}
+
+#[derive(Debug)]
+pub struct AlertMessage(pub AlertLevel, pub AlertDescription);
+
+impl Codec for AlertMessage {
+
+    fn encode(&self, output: &mut Vec<u8>) {
+        self.0.encode(output);
+        self.1.encode(output);
+    }
+
+    fn decode(input: &mut Reader) -> Option<Self> {
+        let level = AlertLevel::decode(input)?;
+        let desc =AlertDescription::decode(input)?;
+        Some(Self(level, desc))
     }
 }

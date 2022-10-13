@@ -209,7 +209,7 @@ pub fn decode_vec_u24<T: Codec>(r: &mut Reader) -> Option<Vec<T>> {
     let mut ret: Vec<T> = Vec::new();
     let len = u24::decode(r)?.0 as usize;
     let mut sub = r.slice(len)?;
-    while sub.any_left() {
+    while sub.has_more() {
         ret.push(T::decode(&mut sub)?);
     }
     Some(ret)

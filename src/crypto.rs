@@ -116,7 +116,7 @@ impl FinishedSender {
 
 pub fn compute_finished_md5(
     master_secret: &[u8],
-    sender: FinishedSender,
+    sender: &FinishedSender,
     transcript: &[u8],
 ) -> [u8; 16] {
     let mut digest = Md5::new();
@@ -139,7 +139,7 @@ pub fn compute_finished_md5(
 
 pub fn compute_finished_sha(
     master_secret: &[u8],
-    sender: FinishedSender,
+    sender: &FinishedSender,
     transcript: &[u8],
 ) -> [u8; 20]{
     let mut digest = Sha1::new();

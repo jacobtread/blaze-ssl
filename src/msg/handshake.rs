@@ -4,7 +4,7 @@ use crate::msg::types::ProtocolVersion;
 
 use super::{
     decode_vec_u16, decode_vec_u24, decode_vec_u8, encode_vec_u16, encode_vec_u24, encode_vec_u8,
-    Certificate, CipherSuite, Codec, HandshakeType, Reader, SSLRandom, u24
+    Certificate, CipherSuite, Codec, HandshakeType, Reader, SSLRandom, u24, Message, MessageType
 };
 
 #[derive(Debug)]
@@ -20,6 +20,7 @@ pub enum HandshakePayload {
 
 impl HandshakePayload {
 
+    /// Returns the type of handshake this is
     pub fn handshake_type(&self) -> HandshakeType {
         match self {
             Self::ClientHello(_) => HandshakeType::ClientHello,
@@ -32,6 +33,14 @@ impl HandshakePayload {
         }
     }
 
+    /// Converts this payload into a message by encoding it
+    pub fn as_message(&self) -> Message {
+        let payload = self.encode_vec();
+        Message {
+            message_type: MessageType::Handshake,
+            payload
+        }
+    }
 }
 
 impl Codec for HandshakePayload {

@@ -1,14 +1,11 @@
-pub mod client;
-pub mod constants;
-pub mod crypto;
-pub mod server;
+pub(crate) mod crypto;
 pub mod stream;
-pub mod msg;
+pub(crate) mod msg;
+pub(crate) mod handshake;
 
 #[cfg(test)]
 mod test {
     use crate::stream::{BlazeStream, StreamMode};
-    use std::io::Write;
     use std::net::TcpListener;
     use std::thread;
     use std::thread::sleep;

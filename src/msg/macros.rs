@@ -42,11 +42,11 @@ macro_rules! codec_enum {
 
         impl $crate::msg::Codec for $name {
             fn encode(&self, output: &mut Vec<u8>) {
-                self.value().encode(&mut output);
+                self.value().encode(output);
             }
 
             fn decode(input: &mut $crate::msg::Reader) -> Option<Self> {
-                Some(Self::from_value(<$ty>::decode(&mut input)?))
+                Some(Self::from_value(<$ty>::decode(input)?))
             }
         }
 

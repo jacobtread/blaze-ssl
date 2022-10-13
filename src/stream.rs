@@ -1,15 +1,16 @@
 use std::cmp;
-use crate::codec::{Certificate, Codec, Reader};
 use crate::crypto::compute_mac;
-use crate::msgs::{fragment_message, BorrowedMessage, MessageDeframer, OpaqueMessage, Alert, FatalAlert};
-use crate::msgs::{Message, MessageType};
 use crypto::rc4::Rc4;
 use crypto::symmetriccipher::SynchronousStreamCipher;
 use rsa::RsaPrivateKey;
 use std::io::{self, ErrorKind, Read, Write};
 use lazy_static::lazy_static;
-use crate::client::ClientHandshake;
-use crate::server::ServerHandshake;
+use crate::handshake::{HandshakeSide, HandshakingWrapper};
+use crate::msg::{
+    Certificate, Message, MessageDeframer, AlertDescription, MessageType,
+    Codec, AlertMessage, BorrowedMessage, OpaqueMessage, Reader
+};
+
 
 lazy_static! {
     /// RSA private key used by the server
@@ -38,11 +39,6 @@ lazy_static! {
 pub struct BlazeStream<S> {
     /// Underlying stream target
     pub(crate) stream: S,
-
-    /// Write sequence counter (Reset on cipher change)
-    pub(crate) write_seq: u64,
-    /// Read sequence counter (Reset on cipher change)
-    pub(crate) read_seq: u64,
 
     /// Message deframer for de-framing messages from the read stream
     deframer: MessageDeframer,
@@ -77,7 +73,7 @@ impl<S> BlazeStream<S> {
 #[derive(Debug)]
 pub enum BlazeError {
     IO(io::Error),
-    FatalAlert(FatalAlert),
+    FatalAlert(AlertDescription),
     Stopped,
     Unsupported,
 }
@@ -108,8 +104,6 @@ impl<S> BlazeStream<S>
     pub fn new(value: S, mode: StreamMode) -> BlazeResult<Self> {
         let stream =  Self {
             stream: value,
-            write_seq: 0,
-            read_seq: 0,
             deframer: MessageDeframer::new(),
             read_processor: ReadProcessor::None,
             write_processor: WriteProcessor::None,
@@ -117,11 +111,11 @@ impl<S> BlazeStream<S>
             read_buffer: Vec::new(),
             stopped: false,
         };
-
-        match mode {
-            StreamMode::Server =>  ServerHandshake::handshake(stream),
-            StreamMode::Client => ClientHandshake::handshake(stream)
-        }
+        let wrapper = HandshakingWrapper::new(stream, match mode {
+            StreamMode::Server => HandshakeSide::Server,
+            StreamMode::Client => HandshakeSide::Client,
+        });
+        wrapper.handshake()
     }
 
     /// Attempts to take the next message form the deframer or read a new
@@ -134,56 +128,47 @@ impl<S> BlazeStream<S>
 
             if let Some(message) = self.deframer.next() {
                 let message = self.read_processor.process(message)
-                    .map_err(|err| match err {
-                        DecryptError::InvalidMac => self.alert_fatal(FatalAlert::BadRecordMac)
-                    })?;
+                .map_err(|err| match err {
+                    DecryptError::InvalidMac => self.alert_fatal(AlertDescription::BadRecordMac)
+                })?;
                 if message.message_type == MessageType::Alert {
                     let mut reader = Reader::new(&message.payload);
-                    if let Some(alert) = Alert::decode(&mut reader) {
-                        self.handle_alert(alert);
+                    if let Some(message) = AlertMessage::decode(&mut reader) {
+                        self.handle_alert(message.1)?;
                         continue;
                     } else {
-                        reader.reset();
-                        let fatal = FatalAlert::decode(&mut reader)
-                            .unwrap_or(FatalAlert::Unknown);
-                        return Err(self.handle_fatal(fatal));
+                        return Err(self.handle_fatal(AlertDescription::Unknown(0)));
                     }
                 }
 
                 return Ok(message);
             }
             if !self.deframer.read(&mut self.stream)? {
-                return Err(self.alert_fatal(FatalAlert::IllegalParameter));
+                return Err(self.alert_fatal(AlertDescription::IllegalParameter));
             }
         }
     }
 
     /// Triggers a shutdown by sending a CloseNotify alert
     pub fn shutdown(&mut self) -> BlazeResult<()>{
-        self.alert(Alert::CloseNotify)
+        self.alert(AlertDescription::CloseNotify)
     }
 
-
     /// Handle the alert message provided
-    pub fn handle_alert(&mut self, alert: Alert) {
+    pub fn handle_alert(&mut self, alert: AlertDescription) -> BlazeResult<()>{
         match alert {
-            Alert::CloseNotify => {
+            AlertDescription::CloseNotify => {
                 // We are closing flush and set stopped
                 let _ = self.flush();
                 self.stopped = true;
+                Ok(())
             }
-            Alert::HandshakeFailure => {}
-            Alert::NoCertificate => {}
-            Alert::BadCertificate => {}
-            Alert::UnsupportedCertificate => {}
-            Alert::CertificateRevoked => {}
-            Alert::CertificateExpired => {}
-            Alert::CertificateUnknown => {}
+            _ => Err(BlazeError::FatalAlert(alert))
         }
     }
 
     /// Handle a fatal alert (Stop the connection and don't attempt more reads/writes)
-    pub fn handle_fatal(&mut self, alert: FatalAlert) -> BlazeError {
+    pub fn handle_fatal(&mut self, alert: AlertDescription) -> BlazeError {
         self.stopped = true;
         return BlazeError::FatalAlert(alert);
     }
@@ -193,7 +178,7 @@ impl<S> BlazeStream<S>
     /// encryption is available writing the output to the underlying
     /// stream
     pub fn write_message(&mut self, message: Message) -> io::Result<()> {
-        for msg in fragment_message(&message) {
+        for msg in message.fragment() {
             let msg = self.write_processor.process(msg);
             let bytes = msg.encode();
             self.stream.write(&bytes)?;
@@ -202,18 +187,26 @@ impl<S> BlazeStream<S>
     }
 
     /// Writes an alert message and calls `handle_alert` with the alert
-    pub fn alert(&mut self, alert: Alert) -> BlazeResult<()> {
+    pub fn alert(&mut self, alert: AlertDescription) -> BlazeResult<()> {
         let message = Message {
             message_type: MessageType::Alert,
             payload: alert.encode_vec(),
         };
         // Internally handle the alert being sent
-        self.handle_alert(alert);
+        self.handle_alert(alert)?;
         self.write_message(message)?;
         Ok(())
     }
 
-    pub fn alert_fatal(&mut self, alert: FatalAlert) -> BlazeError {
+    pub fn fatal_unexpected(&mut self) -> BlazeError {
+        self.alert_fatal(AlertDescription::UnexpectedMessage)
+    }
+
+    pub fn fatal_illegal(&mut self) -> BlazeError {
+        self.alert_fatal(AlertDescription::IllegalParameter)
+    }
+
+    pub fn alert_fatal(&mut self, alert: AlertDescription) -> BlazeError {
         let message = Message {
             message_type: MessageType::Alert,
             payload: alert.encode_vec(),
@@ -236,7 +229,7 @@ impl<S> BlazeStream<S>
 
             if message.message_type != MessageType::ApplicationData {
                 // Alert unexpected message
-                self.alert_fatal(FatalAlert::UnexpectedMessage);
+                self.alert_fatal(AlertDescription::UnexpectedMessage);
                 return Ok(0)
             }
 
