@@ -1,11 +1,9 @@
 pub mod client;
-pub mod codec;
 pub mod constants;
 pub mod crypto;
-pub mod handshake;
-pub mod msgs;
 pub mod server;
 pub mod stream;
+pub mod msg;
 
 #[cfg(test)]
 mod test {
