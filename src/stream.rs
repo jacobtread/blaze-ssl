@@ -1,16 +1,15 @@
-use std::cmp;
-use crate::crypto::compute_mac;
-use crypto::rc4::Rc4;
-use crypto::symmetriccipher::SynchronousStreamCipher;
-use rsa::RsaPrivateKey;
-use std::io::{self, ErrorKind, Read, Write};
-use lazy_static::lazy_static;
+use crate::crypto::HashAlgorithm;
 use crate::handshake::{HandshakeSide, HandshakingWrapper};
 use crate::msg::{
-    Certificate, Message, MessageDeframer, AlertDescription, MessageType,
-    Codec, AlertMessage, BorrowedMessage, OpaqueMessage, Reader
+    AlertDescription, AlertMessage, BorrowedMessage, Certificate, Codec, Message, MessageDeframer,
+    MessageType, OpaqueMessage, Reader,
 };
-
+use crypto::rc4::Rc4;
+use crypto::symmetriccipher::SynchronousStreamCipher;
+use lazy_static::lazy_static;
+use rsa::RsaPrivateKey;
+use std::cmp;
+use std::io::{self, ErrorKind, Read, Write};
 
 lazy_static! {
     /// RSA private key used by the server
@@ -78,7 +77,6 @@ pub enum BlazeError {
     Unsupported,
 }
 
-
 impl From<io::Error> for BlazeError {
     fn from(err: io::Error) -> Self {
         BlazeError::IO(err)
@@ -93,16 +91,15 @@ pub type BlazeResult<T> = Result<T, BlazeError>;
 #[derive(Debug)]
 pub enum StreamMode {
     Server,
-    Client
+    Client,
 }
 
 impl<S> BlazeStream<S>
-    where
-        S: Read + Write,
+where
+    S: Read + Write,
 {
-
     pub fn new(value: S, mode: StreamMode) -> BlazeResult<Self> {
-        let stream =  Self {
+        let stream = Self {
             stream: value,
             deframer: MessageDeframer::new(),
             read_processor: ReadProcessor::None,
@@ -111,10 +108,13 @@ impl<S> BlazeStream<S>
             read_buffer: Vec::new(),
             stopped: false,
         };
-        let wrapper = HandshakingWrapper::new(stream, match mode {
-            StreamMode::Server => HandshakeSide::Server,
-            StreamMode::Client => HandshakeSide::Client,
-        });
+        let wrapper = HandshakingWrapper::new(
+            stream,
+            match mode {
+                StreamMode::Server => HandshakeSide::Server,
+                StreamMode::Client => HandshakeSide::Client,
+            },
+        );
         wrapper.handshake()
     }
 
@@ -123,14 +123,18 @@ impl<S> BlazeStream<S>
     pub fn next_message(&mut self) -> BlazeResult<Message> {
         loop {
             if self.stopped {
-                return Err(BlazeError::Stopped)
+                return Err(BlazeError::Stopped);
             }
 
             if let Some(message) = self.deframer.next() {
-                let message = self.read_processor.process(message)
-                .map_err(|err| match err {
-                    DecryptError::InvalidMac => self.alert_fatal(AlertDescription::BadRecordMac)
-                })?;
+                let message = self
+                    .read_processor
+                    .process(message)
+                    .map_err(|err| match err {
+                        DecryptError::InvalidMac => {
+                            self.alert_fatal(AlertDescription::BadRecordMac)
+                        }
+                    })?;
                 if message.message_type == MessageType::Alert {
                     let mut reader = Reader::new(&message.payload);
                     if let Some(message) = AlertMessage::decode(&mut reader) {
@@ -150,12 +154,12 @@ impl<S> BlazeStream<S>
     }
 
     /// Triggers a shutdown by sending a CloseNotify alert
-    pub fn shutdown(&mut self) -> BlazeResult<()>{
+    pub fn shutdown(&mut self) -> BlazeResult<()> {
         self.alert(AlertDescription::CloseNotify)
     }
 
     /// Handle the alert message provided
-    pub fn handle_alert(&mut self, alert: AlertDescription) -> BlazeResult<()>{
+    pub fn handle_alert(&mut self, alert: AlertDescription) -> BlazeResult<()> {
         match alert {
             AlertDescription::CloseNotify => {
                 // We are closing flush and set stopped
@@ -163,7 +167,7 @@ impl<S> BlazeStream<S>
                 self.stopped = true;
                 Ok(())
             }
-            _ => Err(BlazeError::FatalAlert(alert))
+            _ => Err(BlazeError::FatalAlert(alert)),
         }
     }
 
@@ -172,7 +176,6 @@ impl<S> BlazeStream<S>
         self.stopped = true;
         return BlazeError::FatalAlert(alert);
     }
-
 
     /// Fragments the provided message and encrypts the contents if
     /// encryption is available writing the output to the underlying
@@ -220,17 +223,18 @@ impl<S> BlazeStream<S>
     /// a message from the application layer
     pub fn fill_app_data(&mut self) -> io::Result<usize> {
         if self.stopped {
-            return Err(io_closed())
+            return Err(io_closed());
         }
         let buffer_len = self.read_buffer.len();
         let count = if buffer_len == 0 {
-            let message = self.next_message()
+            let message = self
+                .next_message()
                 .map_err(|_| io::Error::new(ErrorKind::ConnectionAborted, "Ssl Failure"))?;
 
             if message.message_type != MessageType::ApplicationData {
                 // Alert unexpected message
                 self.alert_fatal(AlertDescription::UnexpectedMessage);
-                return Ok(0)
+                return Ok(0);
             }
 
             let payload = message.payload;
@@ -249,12 +253,12 @@ fn io_closed() -> io::Error {
 }
 
 impl<S> Write for BlazeStream<S>
-    where
-        S: Read + Write,
+where
+    S: Read + Write,
 {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if self.stopped {
-            return Err(io_closed())
+            return Err(io_closed());
         }
         self.write_buffer.extend_from_slice(buf);
         Ok(buf.len())
@@ -262,7 +266,7 @@ impl<S> Write for BlazeStream<S>
 
     fn flush(&mut self) -> io::Result<()> {
         if self.stopped {
-            return Err(io_closed())
+            return Err(io_closed());
         }
         let message = Message {
             message_type: MessageType::ApplicationData,
@@ -274,13 +278,13 @@ impl<S> Write for BlazeStream<S>
 }
 
 impl<S> Read for BlazeStream<S>
-    where
-        S: Read + Write,
+where
+    S: Read + Write,
 {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let count = self.fill_app_data()?;
         if self.stopped {
-            return Err(io_closed())
+            return Err(io_closed());
         }
 
         let read = cmp::min(buf.len(), count);
@@ -300,9 +304,10 @@ pub enum WriteProcessor {
     None,
     /// RC4 Encryption processor which encrypts the message before converting
     RC4 {
+        alg: HashAlgorithm,
         key: Rc4,
-        mac_secret: [u8; 20],
-        seq: u64
+        mac_secret: Vec<u8>,
+        seq: u64,
     },
 }
 
@@ -320,10 +325,15 @@ impl WriteProcessor {
                 payload: message.payload.to_vec(),
             },
             // RC4 Encryption
-            WriteProcessor::RC4 { key, mac_secret, seq } => {
+            WriteProcessor::RC4 {
+                alg,
+                key,
+                mac_secret,
+                seq,
+            } => {
                 let mut payload = message.payload.to_vec();
-                let mac = compute_mac(mac_secret, message.message_type.value(), &payload, seq);
-                payload.extend_from_slice(&mac);
+
+                alg.append_mac(&mut payload, mac_secret, message.message_type.value(), seq);
 
                 let mut payload_enc = vec![0u8; payload.len()];
                 key.process(&payload, &mut payload_enc);
@@ -346,8 +356,9 @@ pub enum ReadProcessor {
     None,
     /// RC4 Decryption processor which decrypts the message before converting
     RC4 {
+        alg: HashAlgorithm,
         key: Rc4,
-        mac_secret: [u8; 20],
+        mac_secret: Vec<u8>,
         seq: u64,
     },
 }
@@ -370,18 +381,30 @@ impl ReadProcessor {
                 payload: message.payload,
             },
             // RC4 Decryption
-            ReadProcessor::RC4 { key, mac_secret, seq } => {
+            ReadProcessor::RC4 {
+                alg,
+                key,
+                mac_secret,
+                seq,
+            } => {
                 let mut payload_and_mac = vec![0u8; message.payload.len()];
                 key.process(&message.payload, &mut payload_and_mac);
 
-                let mac_start = payload_and_mac.len() - 20;
+                let mac_start = payload_and_mac.len() - alg.hash_length();
                 let payload = &payload_and_mac[..mac_start];
-
                 let mac = &payload_and_mac[mac_start..];
-                let expected_mac = compute_mac(mac_secret, message.message_type.value(), &payload, seq);
 
-                if !expected_mac.eq(mac) {
-                    return Err(DecryptError::InvalidMac);
+                {
+                    let valid_mac = alg.compare_mac(
+                        mac,
+                        mac_secret,
+                        message.message_type.value(),
+                        &payload,
+                        seq,
+                    );
+                    if !valid_mac {
+                        return Err(DecryptError::InvalidMac);
+                    }
                 }
 
                 *seq += 1;

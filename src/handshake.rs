@@ -1,13 +1,21 @@
-use crypto::rc4::Rc4;
+use crate::crypto::{
+    compute_finished_md5, compute_finished_sha, create_crypto_state, CryptographicState,
+    FinishedSender, HashAlgorithm,
+};
 pub use crate::msg::handshake::*;
-use crate::msg::{AlertDescription, Certificate, CipherSuite, Codec, HandshakeJoiner, Message, MessageTranscript, MessageType, ProtocolVersion, SSLRandom};
-use crate::stream::{BlazeResult, BlazeStream, ReadProcessor, SERVER_CERTIFICATE, SERVER_KEY, WriteProcessor};
-use std::io::{Read, Write};
+use crate::msg::{
+    AlertDescription, Certificate, CipherSuite, Codec, HandshakeJoiner, Message, MessageTranscript,
+    MessageType, ProtocolVersion, SSLRandom,
+};
+use crate::stream::{
+    BlazeResult, BlazeStream, ReadProcessor, WriteProcessor, SERVER_CERTIFICATE, SERVER_KEY,
+};
+use crypto::rc4::Rc4;
 use der::Decode;
 use rsa::rand_core::{OsRng, RngCore};
 use rsa::{BigUint, PaddingScheme, PublicKey, RsaPublicKey};
+use std::io::{Read, Write};
 use x509_cert::Certificate as X509Certificate;
-use crate::crypto::{compute_finished_md5, compute_finished_sha, create_crypto_state, CryptographicState, FinishedSender};
 
 /// Stream wrapper which handles handshaking behavior for clients and servers
 pub(crate) struct HandshakingWrapper<S> {
@@ -26,8 +34,8 @@ pub enum HandshakeSide {
 }
 
 impl<S> HandshakingWrapper<S>
-    where
-        S: Read + Write,
+where
+    S: Read + Write,
 {
     /// Creates a new handshaking wrapper for the provided stream
     pub fn new(stream: BlazeStream<S>, side: HandshakeSide) -> HandshakingWrapper<S> {
@@ -48,7 +56,12 @@ impl<S> HandshakingWrapper<S>
                 self.emit_certificate()?;
                 self.emit_server_hello_done()?;
                 let pm_secret = self.expect_key_exchange()?;
-                let crypto_state = create_crypto_state(&pm_secret, &client_random.0, &server_random.0);
+                let crypto_state = create_crypto_state(
+                    &pm_secret,
+                    crate::crypto::HashAlgorithm::Sha1,
+                    &client_random.0,
+                    &server_random.0,
+                );
                 self.expect_change_cipher_spec(&crypto_state)?;
                 self.expect_finished(&crypto_state)?;
                 self.emit_change_cipher_spec(&crypto_state)?;
@@ -56,11 +69,12 @@ impl<S> HandshakingWrapper<S>
             }
             HandshakeSide::Client => {
                 let client_random = self.emit_client_hello()?;
-                let server_random = self.expect_server_hello()?;
+                let (server_random, alg) = self.expect_server_hello()?;
                 let certificate = self.expect_certificate()?;
                 self.expect_server_hello_done()?;
                 let pm_secret = self.start_key_exchange(certificate)?;
-                let crypto_state = create_crypto_state(&pm_secret, &client_random.0, &server_random.0);
+                let crypto_state =
+                    create_crypto_state(&pm_secret, alg, &client_random.0, &server_random.0);
                 self.emit_change_cipher_spec(&crypto_state)?;
                 self.emit_finished(&crypto_state)?;
                 self.expect_change_cipher_spec(&crypto_state)?;
@@ -76,7 +90,9 @@ impl<S> HandshakingWrapper<S>
         loop {
             if let Some(joined) = self.joiner.next() {
                 let handshake = joined.handshake;
-                if matches!(&self.side, HandshakeSide::Server) && matches!(&handshake, HandshakePayload::Finished(_)) {
+                if matches!(&self.side, HandshakeSide::Server)
+                    && matches!(&handshake, HandshakePayload::Finished(_))
+                {
                     self.transcript.finish();
                 }
                 self.transcript.push_raw(&joined.payload);
@@ -93,8 +109,7 @@ impl<S> HandshakingWrapper<S>
 
     /// Creates a new SSLRandom turning any errors into an IllegalParameter alert
     fn create_random(&mut self) -> BlazeResult<SSLRandom> {
-        SSLRandom::new()
-            .map_err(|_| self.stream.alert_fatal(AlertDescription::IllegalParameter))
+        SSLRandom::new().map_err(|_| self.stream.alert_fatal(AlertDescription::IllegalParameter))
     }
 
     /// Emits a ClientHello message and returns the SSLRandom generates for the hello
@@ -106,7 +121,8 @@ impl<S> HandshakingWrapper<S>
                 CipherSuite::TLS_RSA_WITH_RC4_128_SHA,
                 CipherSuite::TLS_RSA_WITH_RC4_128_MD5,
             ],
-        }).as_message();
+        })
+        .as_message();
         self.transcript.push_message(&message);
         self.stream.write_message(message)?;
         return Ok(random);
@@ -114,11 +130,18 @@ impl<S> HandshakingWrapper<S>
 
     /// Expects the server to provide a ServerHello in the next handshake message
     /// and returns the random from the ServerHello
-    fn expect_server_hello(&mut self) -> BlazeResult<SSLRandom> {
-        match self.next_handshake()? {
-            HandshakePayload::ServerHello(hello) => Ok(hello.random),
+    fn expect_server_hello(&mut self) -> BlazeResult<(SSLRandom, HashAlgorithm)> {
+        let HandshakePayload::ServerHello(hello) = self.next_handshake()? else {
+            return Err(self.stream.fatal_unexpected());
+        };
+        let cipher = hello.cipher_suite;
+        let alg = match cipher {
+            CipherSuite::TLS_RSA_WITH_RC4_128_MD5 => HashAlgorithm::Md5,
+            CipherSuite::TLS_RSA_WITH_RC4_128_SHA => HashAlgorithm::Sha1,
             _ => return Err(self.stream.fatal_unexpected()),
-        }
+        };
+
+        Ok((hello.random, alg))
     }
 
     /// Expects the client to provide a ClientHello in the next handshake message
@@ -136,7 +159,8 @@ impl<S> HandshakingWrapper<S>
         let message = HandshakePayload::ServerHello(ServerHello {
             random: random.clone(),
             cipher_suite: CipherSuite::TLS_RSA_WITH_RC4_128_SHA,
-        }).as_message();
+        })
+        .as_message();
         self.transcript.push_message(&message);
         self.stream.write_message(message)?;
         return Ok(random);
@@ -145,8 +169,9 @@ impl<S> HandshakingWrapper<S>
     /// Emits a Certificate message
     fn emit_certificate(&mut self) -> BlazeResult<()> {
         let message = HandshakePayload::Certificate(ServerCertificate {
-            certificates: vec![SERVER_CERTIFICATE.clone()]
-        }).as_message();
+            certificates: vec![SERVER_CERTIFICATE.clone()],
+        })
+        .as_message();
         self.transcript.push_message(&message);
         self.stream.write_message(message)?;
         return Ok(());
@@ -186,18 +211,14 @@ impl<S> HandshakingWrapper<S>
     /// Begins the key exchange from the client perspective:
     /// Generates pre master key and sends it to the server
     /// returning the generated pre-master key
-    fn start_key_exchange(
-        &mut self,
-        cert: Certificate,
-    ) -> BlazeResult<[u8; 48]> {
+    fn start_key_exchange(&mut self, cert: Certificate) -> BlazeResult<[u8; 48]> {
         let mut rng = OsRng;
         // pre-master secret
         let mut pm_secret = [0u8; 48];
         pm_secret[0..2].copy_from_slice(&ProtocolVersion::SSLv3.encode_vec());
         rng.fill_bytes(&mut pm_secret[2..]);
 
-        let x509 = X509Certificate::from_der(&cert.0)
-            .map_err(|_| self.stream.fatal_illegal())?;
+        let x509 = X509Certificate::from_der(&cert.0).map_err(|_| self.stream.fatal_illegal())?;
 
         let pb_key_info = x509.tbs_certificate.subject_public_key_info;
         let rsa_pub_key = pkcs1::RsaPublicKey::from_der(pb_key_info.subject_public_key)
@@ -206,8 +227,8 @@ impl<S> HandshakingWrapper<S>
         let modulus = BigUint::from_bytes_be(rsa_pub_key.modulus.as_bytes());
         let public_exponent = BigUint::from_bytes_be(rsa_pub_key.public_exponent.as_bytes());
 
-        let public_key = RsaPublicKey::new(modulus, public_exponent)
-            .map_err(|_| self.stream.fatal_illegal())?;
+        let public_key =
+            RsaPublicKey::new(modulus, public_exponent).map_err(|_| self.stream.fatal_illegal())?;
 
         let pm_enc = public_key
             .encrypt(&mut rng, PaddingScheme::PKCS1v15Encrypt, &pm_secret)
@@ -218,8 +239,7 @@ impl<S> HandshakingWrapper<S>
 
     /// Emits the ClientKeyExchange method with the provided key exchange bytes
     fn emit_key_exchange(&mut self, pm_enc: Vec<u8>) -> BlazeResult<()> {
-        let message = HandshakePayload::ClientKeyExchange(OpaqueBytes(pm_enc))
-            .as_message();
+        let message = HandshakePayload::ClientKeyExchange(OpaqueBytes(pm_enc)).as_message();
         self.transcript.push_message(&message);
         self.stream.write_message(message)?;
         Ok(())
@@ -236,19 +256,17 @@ impl<S> HandshakingWrapper<S>
         Ok(pm_secret)
     }
 
-    fn get_crypto_secrets(&mut self, state: &CryptographicState, is_recv: bool) -> ([u8; 20], Rc4) {
+    fn get_crypto_secrets(&mut self, state: &CryptographicState, is_recv: bool) -> (Vec<u8>, Rc4) {
         let (a, b) = match (&self.side, is_recv) {
-            (HandshakeSide::Client, true) |
-            (HandshakeSide::Server, false)
-            => (&state.server_write_secret, &state.server_write_key),
-            (HandshakeSide::Client, false) |
-            (HandshakeSide::Server, true)
-            => (&state.client_write_secret, &state.client_write_key)
+            (HandshakeSide::Client, true) | (HandshakeSide::Server, false) => {
+                (state.server_write_secret.clone(), &state.server_write_key)
+            }
+            (HandshakeSide::Client, false) | (HandshakeSide::Server, true) => {
+                (state.client_write_secret.clone(), &state.client_write_key)
+            }
         };
-        let mut mac_secret = [0u8; 20];
-        mac_secret.clone_from(a);
         let key = Rc4::new(b);
-        (mac_secret, key)
+        (a, key)
     }
 
     fn emit_change_cipher_spec(&mut self, state: &CryptographicState) -> BlazeResult<()> {
@@ -259,6 +277,7 @@ impl<S> HandshakingWrapper<S>
         self.stream.write_message(message)?;
         let (mac_secret, key) = self.get_crypto_secrets(state, false);
         self.stream.write_processor = WriteProcessor::RC4 {
+            alg: state.alg,
             mac_secret,
             key,
             seq: 0,
@@ -273,6 +292,7 @@ impl<S> HandshakingWrapper<S>
         }
         let (mac_secret, key) = self.get_crypto_secrets(state, true);
         self.stream.read_processor = ReadProcessor::RC4 {
+            alg: state.alg,
             mac_secret,
             key,
             seq: 0,
@@ -284,15 +304,12 @@ impl<S> HandshakingWrapper<S>
         let master_key = &state.master_key;
         let sender = match &self.side {
             HandshakeSide::Server => FinishedSender::Server,
-            HandshakeSide::Client => FinishedSender::Client
+            HandshakeSide::Client => FinishedSender::Client,
         };
         let md5_hash = compute_finished_md5(master_key, &sender, self.transcript.current());
         let sha_hash = compute_finished_sha(master_key, &sender, self.transcript.current());
 
-        let message = HandshakePayload::Finished(Finished {
-            sha_hash,
-            md5_hash,
-        }).as_message();
+        let message = HandshakePayload::Finished(Finished { sha_hash, md5_hash }).as_message();
 
         if let HandshakeSide::Client = &self.side {
             self.transcript.push_message(&message);
@@ -310,7 +327,7 @@ impl<S> HandshakingWrapper<S>
         let master_key = &state.master_key;
         let sender = match &self.side {
             HandshakeSide::Server => FinishedSender::Client,
-            HandshakeSide::Client => FinishedSender::Server
+            HandshakeSide::Client => FinishedSender::Server,
         };
 
         let exp_md5_hash = compute_finished_md5(master_key, &sender, self.transcript.last());
