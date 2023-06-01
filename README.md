@@ -4,8 +4,13 @@
 ![Cargo Version](https://img.shields.io/crates/v/blaze-ssl?style=for-the-badge)
 ![Cargo Downloads](https://img.shields.io/crates/d/blaze-ssl?style=for-the-badge)
 
+## 📌 Archive Notice
 
-> 📌**IMPORTANT**📌 If you're here looking for a security focused SSL library this is not it check out
+This repository has been replaced by a newer crate https://github.com/jacobtread/blaze-ssl-async this crate likely has many 
+bugs or things that simply don't work so its recommended you use the newer crate instead.
+
+
+> **Warning** If you're here looking for a security focused SSL library this is not it check out
 > [rustls (https://github.com/rustls/rustls)](https://github.com/rustls/rustls) This 
 > library exists to fill a legacy need for EA games that depend upon the 
 > gosredirector.ea.com service
